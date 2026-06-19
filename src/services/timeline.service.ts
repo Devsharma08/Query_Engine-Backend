@@ -1,22 +1,36 @@
 import { generateChannelId } from "../utils/youtube-parser";
 
+/**
+ * Represents a single timed event (spoken voice transcript or chat/comment).
+ */
 export interface TimelineEvent {
   type: 'VOICE' | 'CHAT';
-  timestamp: number; // relative offset from stream start in seconds
+  timestamp: number; // Offset from stream start in seconds
   author?: string;
   message: string;
 }
 
+/**
+ * Represents a grouped window of events with stored semantic embeddings.
+ */
 export interface TimelineBlock {
   startInSeconds: number;
   endInSeconds: number;
   events: TimelineEvent[];
   combinedText: string;
+  embedding?: number[];
 }
 
 export class TimelineService {
   /**
-   * Merges voice transcript segments and comments/chat into a sorted event array
+   * Merges transcripts (spoken text) and comments/chat logs into a single timeline,
+   * adjusting chat times by typing speed offsets and sorting chronologically.
+   * 
+   * @param transcriptSegments Raw voice transcript segments
+   * @param commentsOrChat Raw chat replay comments or standard fallback comments
+   * @param videoStartTimeStr Stream starting timestamp (ISO string)
+   * @param streamerChannelLink Streamer's channel URL link
+   * @returns Chronologically sorted TimelineEvent array
    */
   public compileTimeline(
     transcriptSegments: any[],
@@ -26,7 +40,7 @@ export class TimelineService {
   ): TimelineEvent[] {
     const events: TimelineEvent[] = [];
 
-    // 1. Add Transcript Segments (VOICE)
+    // Parse transcript segments (VOICE events)
     if (Array.isArray(transcriptSegments)) {
       for (const segment of transcriptSegments) {
         events.push({
@@ -37,23 +51,22 @@ export class TimelineService {
       }
     }
 
-    // Resolve streamer identifier if standard comments fallback was used
-    const streamerChannelId = streamerChannelLink ? generateChannelId(streamerChannelLink) : '' ;
+    const streamerChannelId = streamerChannelLink ? generateChannelId(streamerChannelLink) : '';
 
-    // 2. Add Chat / Comments
+    // Parse comments and chat logs (CHAT events)
     if (Array.isArray(commentsOrChat)) {
       const videoStartMs = videoStartTimeStr ? new Date(videoStartTimeStr).getTime() : 0;
 
       for (const item of commentsOrChat) {
         let relativeSeconds: number | null = null;
 
-        // A. Check if it's a live chat replay (it already has time_in_video in seconds)
+        // Fetch timing from live chat replay offset if available
         if (typeof item.time_in_video === 'number') {
           relativeSeconds = item.time_in_video;
         } else if (item.time_in_video !== undefined && item.time_in_video !== null) {
           relativeSeconds = parseFloat(item.time_in_video);
         }
-        // B. Check if it's standard comment with publishedAt timestamp (resolve relative time)
+        // Fallback: Compute relative timestamp using standard comment publish date
         else if (item.publishedAt && videoStartMs > 0) {
           const commentTimeMs = new Date(item.publishedAt).getTime();
           relativeSeconds = Math.max(0, Math.floor((commentTimeMs - videoStartMs) / 1000));
@@ -61,25 +74,35 @@ export class TimelineService {
 
         if (relativeSeconds !== null && !isNaN(relativeSeconds)) {
           const isStreamer = item.is_streamer === true || item.isStreamer === true;
+          const message = item.message || '';
           
+          // Compensate for typing delay (assume 1.5 seconds per word typing duration)
+          const wordCount = message.trim().split(/\s+/).filter((w: string) => w.length > 0).length;
+          const typingDuration = wordCount * 1.5;
+          const adjustedTimestamp = Math.max(0, relativeSeconds - typingDuration);
+
           events.push({
             type: 'CHAT',
-            timestamp: relativeSeconds,
+            timestamp: adjustedTimestamp,
             author: item.author || (isStreamer ? 'Streamer' : 'User'),
-            message: item.message || ''
+            message: message
           });
         }
       }
     }
 
-    // 3. Sort chronologically by timestamp
+    // Sort all events chronologically from start to finish
     return events.sort((a, b) => a.timestamp - b.timestamp);
   }
 
   /**
-   * Formats the chronological event list into 30-second window blocks
+   * Batches compiled timeline events into windows of a fixed length (e.g. 120s blocks).
+   * 
+   * @param events Sorted timeline events
+   * @param windowSeconds Window length in seconds (default is 120)
+   * @returns Array of grouped timeline blocks
    */
-  public generateTimelineBlocks(events: TimelineEvent[], windowSeconds: number = 30): TimelineBlock[] {
+  public generateTimelineBlocks(events: TimelineEvent[], windowSeconds: number = 120): TimelineBlock[] {
     if (events.length === 0) return [];
 
     const blocks: TimelineBlock[] = [];
@@ -88,7 +111,6 @@ export class TimelineService {
     for (let start = 0; start <= maxTimestamp; start += windowSeconds) {
       const end = start + windowSeconds;
       
-      // Filter events falling inside this window
       const windowEvents = events.filter(e => e.timestamp >= start && e.timestamp < end);
 
       if (windowEvents.length > 0) {
@@ -114,7 +136,7 @@ export class TimelineService {
   }
 
   /**
-   * Generates standard markdown format representation of the timeline (master_timeline.md)
+   * Generates a readable markdown timeline summarizing all events.
    */
   public generateMarkdownTimeline(events: TimelineEvent[]): string {
     let md = "# Master Stream Timeline\n\n";
@@ -129,6 +151,9 @@ export class TimelineService {
     return md;
   }
 
+  /**
+   * Formats raw seconds into a readable label (HH:MM:SS or MM:SS).
+   */
   private formatTimeLabel(seconds: number): string {
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);

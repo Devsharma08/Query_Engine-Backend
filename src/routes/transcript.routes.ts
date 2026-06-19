@@ -1,70 +1,9 @@
-import {Router,Request,Response} from 'express';
-import { TranscriptService } from '../services/transcript.service';
-import { translateText,detectLanguage } from '../utils/youtube-parser';
-import { DataProcessorService } from '../services/data-processor.service';
-import { AiSummarizerService } from '../services/ai-summarizer.service';
+import { Router } from 'express';
+import { getVideoTranscript, processTranscriptOutcomes } from '../controllers/transcript.controller';
 
 const router = Router();
-const transcriptService = new TranscriptService();
-const dataProcessor = new DataProcessorService();
-const aiSummarizer = new AiSummarizerService();
 
-// optimisation ideas - 1. cache getFullvideoTranscript()  
-
-router.post('/transcript', async (req: Request, res: Response): Promise<void> => {
-   try {
-      const { url,channelLink } = req.body;
-      if (!url) {
-         res.status(400).json({ error: 'Missing url' });
-         return;
-      }
-      const transcript = await transcriptService.getFullVideoTranscript(url);
-      const {language} = detectLanguage(transcript.fullCaptionText.substring(0,500));
-      console.log(language);
-      const targetLanguage = 'en';
-      const translatedText = await translateText(transcript.fullCaptionText,targetLanguage);
-      res.json({success:true,...transcript,translatedText});
-   } catch (error: any) {
-      console.error("Route error:", error);
-      res.status(500).json({ error: error.message });
-      return;
-   }
-});
-
-router.post('/process-outcomes', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { url } = req.body;
-    if (!url) {
-      res.status(400).json({ error: 'Missing video url parameter' });
-      return;
-    }
-
-    const transcriptData = await transcriptService.getFullVideoTranscript(url);
-    const rawText = transcriptData.fullCaptionText;
-
-    const extractedTags = dataProcessor.extractKeywords(rawText);
-
-    const autoChapters = dataProcessor.generateAutoChapters(transcriptData.timelineSegments);
-
-    const aiSummary = await aiSummarizer.generateSummary(rawText);
-
-    res.json({
-      status: 'success',
-      videoId: transcriptData.videoId,
-      analytics: {
-        aiSummary: aiSummary,
-        suggestedTags: extractedTags,
-        totalWordsProcessed: rawText.split(/\s+/).length,
-        chapters: autoChapters
-      }
-    });
-
-  } catch (error: any) {
-    res.status(500).json({ 
-      error: 'Data processing engine execution failed', 
-      details: error.message 
-    });
-  }
-});
+router.post('/transcript', getVideoTranscript);
+router.post('/process-outcomes', processTranscriptOutcomes);
 
 export default router;

@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import dotenv from 'dotenv'
+import cors from 'cors';
 
 
 import vedioRouter from './routes/video.routes';
@@ -15,6 +16,9 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 
 app.use(express.json());
+app.use(cors({
+  origin:'http://localhost:3000'
+}))
 app.use('/api/video',vedioRouter);
 app.use('/api/archive',archiveRouter);
 app.use('/api',transcriptRouter);
