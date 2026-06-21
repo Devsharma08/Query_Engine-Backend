@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  # Ollama Local LLM & Embedding Service
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama-service
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    # Automatically downloads required models on first run
+    entrypoint: >
+      /bin/sh -c "
+      ollama serve &
+      sleep 5;
+      echo '=== Pulling gemma3:1b ===';
+      ollama pull gemma3:1b;
+      echo '=== Pulling nomic-embed-text ===';
+      ollama pull nomic-embed-text;
+      echo '=== Bootstrapping completed, keeping ollama running ===';
+      wait
+      "
+    restart: always
+
+  # Node.js API Service
+  backend:
+    build:
+      context: .      # <-- Tells Compose to build from current folder
+      dockerfile: Dockerfile
+    container_name: backend-service
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+      - OLLAMA_HOST=http://ollama:11434
+      - YT_V3_API_KEY=${YT_V3_API_KEY}
+      - GROK_API_KEY=${GROK_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    depends_on:
+      - ollama
+    restart: always
+
+volumes:
+  ollama-data:
