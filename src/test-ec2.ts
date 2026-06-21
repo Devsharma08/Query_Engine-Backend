@@ -41,6 +41,40 @@ async function runTests() {
    } catch (e: any) {
       console.error("FAILED:", e.message);
    }
+
+   console.log("\n=== Test 4: Cookie Fetch (No Proxy) ===");
+   const youtubeCookie = process.env.YOUTUBE_COOKIE;
+   if (!youtubeCookie) {
+      console.error("Test 4 FAILED: YOUTUBE_COOKIE is not set in .env");
+      return;
+   }
+   console.log("Using YouTube Cookie...");
+   try {
+      const res = await YoutubeTranscript.fetchTranscript(videoId, {
+         fetch: async (url: any, init: any) => {
+            const headers = {
+               ...(init?.headers || {}),
+               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+               "Cookie": youtubeCookie
+            };
+            console.log(`[Fetch Request] URL: ${url}`);
+            try {
+               const response = await fetch(url, {
+                  ...init,
+                  headers
+               } as any);
+               console.log(`[Fetch Response] Status: ${response.status} ${response.statusText}`);
+               return response;
+            } catch (err: any) {
+               console.error(`[Fetch Network Error]:`, err.message);
+               throw err;
+            }
+         }
+      });
+      console.log("Test 4 SUCCESS! Segments:", res.length);
+   } catch (e: any) {
+      console.error("Test 4 FAILED:", e.message);
+   }
 }
 
 runTests();

@@ -38,6 +38,7 @@ services:
       - GROK_API_KEY=${GROK_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - PROXY_URL=${PROXY_URL}
+      - YOUTUBE_COOKIE=${YOUTUBE_COOKIE}
     depends_on:
       - ollama
     restart: always
