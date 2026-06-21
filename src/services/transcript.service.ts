@@ -2,6 +2,19 @@ import { YoutubeTranscript } from "youtube-transcript";
 import { extractVideoId } from "../utils/youtube-parser";
 import { YoutubeService } from "./google.service";
 import { ProxyAgent } from "undici";
+import * as crypto from "crypto";
+
+function getSapisidFromCookie(cookieStr: string): string | undefined {
+   const match = cookieStr.match(/SAPISID=([^;]+)/);
+   return match ? match[1].trim() : undefined;
+}
+
+function generateSapisidHash(sapisid: string, origin: string = "https://www.youtube.com"): string {
+   const timestamp = Math.floor(Date.now() / 1000);
+   const message = `${timestamp} ${sapisid} ${origin}`;
+   const hash = crypto.createHash("sha1").update(message).digest("hex");
+   return `SAPISIDHASH ${timestamp}_${hash}`;
+}
 
 interface TimelineSegment {
    text: string;
@@ -81,6 +94,10 @@ export class TranscriptService {
                   headers["User-Agent"] = resolvedUA;
                   if (cleanCookie) {
                      headers["Cookie"] = cleanCookie;
+                     const sapisid = getSapisidFromCookie(cleanCookie);
+                     if (sapisid) {
+                        headers["Authorization"] = generateSapisidHash(sapisid);
+                     }
                   }
 
                   return fetch(requestUrl, {

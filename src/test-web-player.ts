@@ -1,8 +1,21 @@
 import * as dotenv from "dotenv";
+import * as crypto from "crypto";
 
 dotenv.config();
 
 const INNERTUBE_API_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
+
+function getSapisidFromCookie(cookieStr: string): string | undefined {
+   const match = cookieStr.match(/SAPISID=([^;]+)/);
+   return match ? match[1].trim() : undefined;
+}
+
+function generateSapisidHash(sapisid: string, origin: string = "https://www.youtube.com"): string {
+   const timestamp = Math.floor(Date.now() / 1000);
+   const message = `${timestamp} ${sapisid} ${origin}`;
+   const hash = crypto.createHash("sha1").update(message).digest("hex");
+   return `SAPISIDHASH ${timestamp}_${hash}`;
+}
 
 async function testClient(label: string, clientName: string, clientVersion: string, userAgent: string) {
    const videoId = "afLeOefHKG4";
@@ -17,13 +30,23 @@ async function testClient(label: string, clientName: string, clientVersion: stri
    console.log(`User-Agent: ${userAgent}`);
 
    try {
-      const headers = {
+      const headers: Record<string, string> = {
           'Content-Type': 'application/json',
           'User-Agent': userAgent,
           'Origin': 'https://www.youtube.com',
           'Referer': 'https://www.youtube.com/',
-          ...(cleanCookie && { 'Cookie': cleanCookie })
       };
+
+      if (cleanCookie) {
+         headers['Cookie'] = cleanCookie;
+         const sapisid = getSapisidFromCookie(cleanCookie);
+         if (sapisid) {
+            headers['Authorization'] = generateSapisidHash(sapisid);
+            console.log(`Generated Authorization header: ${headers['Authorization']}`);
+         } else {
+            console.log("No SAPISID found in cookie.");
+         }
+      }
 
       const resp = await fetch(INNERTUBE_API_URL, {
           method: 'POST',
@@ -60,7 +83,8 @@ async function testClient(label: string, clientName: string, clientVersion: stri
                headers: {
                   'User-Agent': userAgent,
                   'Referer': 'https://www.youtube.com/',
-                  ...(cleanCookie && { 'Cookie': cleanCookie })
+                  ...(cleanCookie && { 'Cookie': cleanCookie }),
+                  ...(headers['Authorization'] && { 'Authorization': headers['Authorization'] })
                }
             });
             console.log(`Timedtext Status: ${timedtextResp.status} ${timedtextResp.statusText}`);
