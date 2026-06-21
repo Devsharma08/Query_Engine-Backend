@@ -50,7 +50,7 @@ async function runTests() {
             return fetch(url, {
                ...init,
                dispatcher: proxyAgent
-            });
+            } as any);
          }
       });
       console.log("Test 3 SUCCESS! Segments:", res.length);

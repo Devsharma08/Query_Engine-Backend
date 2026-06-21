@@ -38,7 +38,7 @@ export class TranscriptService {
                   return fetch(url, {
                      ...init,
                      dispatcher: proxyAgent
-                  });
+                  } as any);
                }
             };
          }
