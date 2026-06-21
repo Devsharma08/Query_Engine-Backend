@@ -1,14 +1,16 @@
-import { setGlobalDispatcher, Agent } from 'undici';
+import { fetch as undiciFetch, Agent } from 'undici';
 import { Ollama } from 'ollama';
 
-// Increase fetch timeouts globally to prevent HeadersTimeoutError
-setGlobalDispatcher(new Agent({
+const ollamaAgent = new Agent({
   connectTimeout: 60000,
   headersTimeout: 300000,
   bodyTimeout: 300000,
-}));
+});
 
-const ollama = new Ollama({ host: process.env.OLLAMA_HOST || 'http://127.0.0.1:11434' });
+const ollama = new Ollama({
+  host: process.env.OLLAMA_HOST || 'http://127.0.0.1:11434',
+  fetch: (input: any, init: any) => undiciFetch(input, { ...init, dispatcher: ollamaAgent })
+});
 
 async function test() {
   const host = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';

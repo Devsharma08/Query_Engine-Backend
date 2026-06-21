@@ -1,6 +1,16 @@
 import { Ollama } from 'ollama';
+import { fetch as undiciFetch, Agent } from 'undici';
 
-const ollama = new Ollama({ host: process.env.OLLAMA_HOST || 'http://127.0.0.1:11434' });
+const ollamaAgent = new Agent({
+  connectTimeout: 60000,
+  headersTimeout: 300000,
+  bodyTimeout: 300000,
+});
+
+const ollama = new Ollama({
+  host: process.env.OLLAMA_HOST || 'http://127.0.0.1:11434',
+  fetch: (input, init) => undiciFetch(input, { ...init, dispatcher: ollamaAgent })
+});
 
 export interface TimelineSegment {
   text: string;

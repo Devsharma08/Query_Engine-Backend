@@ -1,12 +1,18 @@
 import { Ollama } from 'ollama';
-
-const ollama = new Ollama({ host: process.env.OLLAMA_HOST || 'http://127.0.0.1:11434' });
+import { fetch as undiciFetch, Agent } from 'undici';
 import { TimelineBlock } from "./timeline.service";
 
-/**
- * Service to handle searching across video timeline blocks
- * using both keyword-density matching and semantic vector similarity.
- */
+const ollamaAgent = new Agent({
+  connectTimeout: 60000,
+  headersTimeout: 300000,
+  bodyTimeout: 300000,
+});
+
+const ollama = new Ollama({
+  host: process.env.OLLAMA_HOST || 'http://127.0.0.1:11434',
+  fetch: (input, init) => undiciFetch(input, { ...init, dispatcher: ollamaAgent })
+});
+
 export class SearchService {
   /**
    * Performs standard keyword search, counting term occurrences and phrase matches.
