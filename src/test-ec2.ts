@@ -18,24 +18,28 @@ async function runTests() {
    try {
       const res = await YoutubeTranscript.fetchTranscript(videoId, {
          fetch: async (url: any, init: any) => {
+            let requestUrl = url;
+            // Force XML formatting if it's a timedtext request and missing fmt=srv3
+            if (url.includes("/api/timedtext") && !url.includes("&fmt=srv3")) {
+               requestUrl = `${url}&fmt=srv3`;
+            }
+
             const headers = {
                ...(init?.headers || {}),
                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                "Cookie": cleanCookie
             };
-            console.log(`[Fetch Request] URL: ${url}`);
+            console.log(`[Fetch Request] URL: ${requestUrl}`);
             try {
-               const response = await fetch(url, {
+               const response = await fetch(requestUrl, {
                   ...init,
                   headers
                } as any);
                
-               // Read body text for logging
                const text = await response.text();
                console.log(`[Fetch Response] Status: ${response.status} ${response.statusText}`);
-               console.log(`[Fetch Response] Body (first 500 chars):`, text.substring(0, 500));
+               console.log(`[Fetch Response] Body (first 200 chars):`, text.substring(0, 200));
                
-               // Re-create the response object since we consumed the body
                return new Response(text, {
                   status: response.status,
                   statusText: response.statusText,
