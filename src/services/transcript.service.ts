@@ -55,7 +55,11 @@ export class TranscriptService {
          let fetchConfig = {};
 
          if (proxyUrl || cleanCookie || youtubeUA) {
-            const proxyAgent = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
+            // When cookies are present, bypass the proxy since direct connection works and proxy IPs are often rate-limited (429)
+            const proxyAgent = (proxyUrl && !cleanCookie) ? new ProxyAgent(proxyUrl) : undefined;
+            if (proxyUrl && cleanCookie) {
+               console.log("[TranscriptService] Cookie is present. Bypassing PROXY_URL to avoid proxy rate limits.");
+            }
             fetchConfig = {
                fetch: async (url: string, init: any) => {
                   let requestUrl = url;
