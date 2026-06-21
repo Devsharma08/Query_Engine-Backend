@@ -44,8 +44,13 @@ export class TranscriptService {
          const proxyUrl = process.env.PROXY_URL;
          const youtubeCookie = process.env.YOUTUBE_COOKIE;
          const youtubeUA = process.env.YOUTUBE_USER_AGENT;
-         const cleanCookie = youtubeCookie 
-            ? youtubeCookie.replace(/^["']|["']$/g, "").replace(/[\r\n]+/g, "").trim() 
+         
+         console.log(`[EXPRESS-APP-DEBUG] Ingesting videoId: ${videoId}`);
+         console.log(`[EXPRESS-APP-DEBUG] YOUTUBE_COOKIE length: ${youtubeCookie?.length || 0}`);
+         console.log(`[EXPRESS-APP-DEBUG] YOUTUBE_USER_AGENT: ${youtubeUA}`);
+         
+         const cleanCookie = youtubeCookie
+            ? youtubeCookie.replace(/^["']|["']$/g, "").replace(/[\r\n]+/g, "").trim()
             : undefined;
          let fetchConfig = {};
 
@@ -65,10 +70,10 @@ export class TranscriptService {
                   }
 
                   const isInnerTube = url.includes("/youtubei/v1/player");
-                  
+
                   // We use the mobile UA for both watch pages and InnerTube if we force MWEB
                   let resolvedUA = youtubeUA || "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Mobile Safari/537.36";
-                  
+
                   let bodyOverride = init?.body;
                   if (isInnerTube && init?.body) {
                      try {
@@ -107,6 +112,12 @@ export class TranscriptService {
                      }
                   }
 
+                  console.log(`[EXPRESS-APP-DEBUG.fetch] Request URL: ${requestUrl}`);
+                  console.log(`[EXPRESS-APP-DEBUG.fetch] Request Headers:`, JSON.stringify({
+                     ...headers,
+                     Cookie: headers.Cookie ? headers.Cookie.substring(0, 50) + "..." : undefined
+                  }));
+
                   try {
                      const response = await fetch(requestUrl, {
                         ...init,
@@ -116,7 +127,8 @@ export class TranscriptService {
                      } as any);
 
                      let text = await response.text();
-                     
+                     console.log(`[EXPRESS-APP-DEBUG.fetch] Response Status: ${response.status} ${response.statusText}`);
+
                      // Intercept /youtubei/v1/player response to rewrite relative baseUrl paths
                      if (isInnerTube && response.status === 200) {
                         try {
@@ -157,10 +169,10 @@ export class TranscriptService {
 
          // fetching comments from the youtube video using youtube api for deep understanding of the video
          const comments = await this.youtubeService.getAllPastLiveComments(videoId);
-         console.log("comments from transcript service : ",comments);
+         console.log("comments from transcript service : ", comments);
 
          // task - on success will match the o/p with chat for reference for doubts and some other info will figure out later
-         
+
 
          const fullText = transcript.map((item) => {
             return item.text
@@ -179,16 +191,16 @@ export class TranscriptService {
             timelineSegments: transcript.map((segment) => {
                const startInSeconds = Math.floor(segment.offset / 1000);
                const durationInSeconds = Math.floor(segment.duration / 1000);
-               return{
-               text: segment.text.replace(/&#39;/g, "'").trim(),
-               startInSeconds: startInSeconds,
-               durationInSeconds: durationInSeconds,
-               totalTimeInSeconds:startInSeconds+durationInSeconds
+               return {
+                  text: segment.text.replace(/&#39;/g, "'").trim(),
+                  startInSeconds: startInSeconds,
+                  durationInSeconds: durationInSeconds,
+                  totalTimeInSeconds: startInSeconds + durationInSeconds
                }
             }),
 
          }
-      } catch (error:any) {
+      } catch (error: any) {
          console.error("Error fetching video transcript:", error);
          throw new Error(error.message || "failed to retrieve captions");
       }
