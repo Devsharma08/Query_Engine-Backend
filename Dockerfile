@@ -13,6 +13,9 @@ RUN pip install --no-cache-dir chat-downloader
 # setting up node working dir
 WORKDIR /app
 
+# Set Node options to increase heap limit for TypeScript build
+ENV NODE_OPTIONS="--max-old-space-size=1024"
+
 # copy packages files
 COPY package.json pnpm-lock.yaml* ./
 
