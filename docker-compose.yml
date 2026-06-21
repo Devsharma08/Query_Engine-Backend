@@ -39,6 +39,7 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - PROXY_URL=${PROXY_URL}
       - YOUTUBE_COOKIE=${YOUTUBE_COOKIE}
+      - YOUTUBE_USER_AGENT=${YOUTUBE_USER_AGENT}
     depends_on:
       - ollama
     restart: always

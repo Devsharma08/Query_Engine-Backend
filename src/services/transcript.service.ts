@@ -30,23 +30,60 @@ export class TranscriptService {
 
          const proxyUrl = process.env.PROXY_URL;
          const youtubeCookie = process.env.YOUTUBE_COOKIE;
+         const youtubeUA = process.env.YOUTUBE_USER_AGENT;
          const cleanCookie = youtubeCookie 
             ? youtubeCookie.replace(/^["']|["']$/g, "").replace(/[\r\n]+/g, "").trim() 
             : undefined;
          let fetchConfig = {};
 
-         if (proxyUrl || cleanCookie) {
+         if (proxyUrl || cleanCookie || youtubeUA) {
             const proxyAgent = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
             fetchConfig = {
                fetch: (url: string, init: any) => {
-                  const headers = {
-                     ...(init?.headers || {}),
-                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                  let requestUrl = url;
+                  // Force XML formatting if it's a timedtext request and missing fmt=srv3
+                  if (url.includes("/api/timedtext") && !url.includes("&fmt=srv3")) {
+                     requestUrl = `${url}&fmt=srv3`;
+                  }
+
+                  const isInnerTube = url.includes("/youtubei/v1/player");
+                  
+                  // Extract original User-Agent if any
+                  let originalUA: string | undefined;
+                  if (init?.headers) {
+                     for (const [key, value] of Object.entries(init.headers)) {
+                        if (key.toLowerCase() === "user-agent") {
+                           originalUA = value as string;
+                           break;
+                        }
+                     }
+                  }
+
+                  let resolvedUA = youtubeUA || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+                  if (isInnerTube) {
+                     resolvedUA = originalUA || "com.google.android.youtube/20.10.38 (Linux; U; Android 14)";
+                  }
+
+                  const headers: Record<string, string> = {
                      "Origin": "https://www.youtube.com",
-                     "Referer": "https://www.youtube.com/",
-                     ...(cleanCookie && { "Cookie": cleanCookie })
+                     "Referer": "https://www.youtube.com/"
                   };
-                  return fetch(url, {
+
+                  if (init?.headers) {
+                     for (const [key, value] of Object.entries(init.headers)) {
+                        const lowerKey = key.toLowerCase();
+                        if (lowerKey !== "user-agent" && lowerKey !== "cookie") {
+                           headers[key] = value as string;
+                        }
+                     }
+                  }
+
+                  headers["User-Agent"] = resolvedUA;
+                  if (cleanCookie) {
+                     headers["Cookie"] = cleanCookie;
+                  }
+
+                  return fetch(requestUrl, {
                      ...init,
                      headers,
                      ...(proxyAgent && { dispatcher: proxyAgent })
