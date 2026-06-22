@@ -107,13 +107,18 @@ export async function getChatOrComments(req: Request, res: Response): Promise<vo
       }
 
       // If completed live stream, fetch logs using local Python downloader
-      let fullPastChatLogs: any[] = [];
+      let fullPastChatLogs: any = [];
       if (isLiveStream) {
          try {
             fullPastChatLogs = await getPastStreamerChat(url);
          } catch (error: any) {
             console.warn(`[archiveChatController.getChatOrComments] Could not fetch chat replay: ${error.message}`);
          }
+      }
+
+      if (fullPastChatLogs && !Array.isArray(fullPastChatLogs)) {
+         console.warn(`[archiveChatController.getChatOrComments] Python script returned error:`, fullPastChatLogs.error || fullPastChatLogs);
+         fullPastChatLogs = [];
       }
 
       if (Array.isArray(fullPastChatLogs) && fullPastChatLogs.length > 0) {
