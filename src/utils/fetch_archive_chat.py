@@ -11,15 +11,25 @@ def create_netscape_cookies_file(cookie_str, file_path):
     into the tab-separated Netscape cookie file format expected by yt-dlp and chat-downloader.
     """
     try:
+        # Clean the cookie string: remove any newlines, carriage returns, or enclosing quotes
+        cookie_str = cookie_str.replace('\r', '').replace('\n', '').strip()
+        if cookie_str.startswith('"') and cookie_str.endswith('"'):
+            cookie_str = cookie_str[1:-1]
+        if cookie_str.startswith("'") and cookie_str.endswith("'"):
+            cookie_str = cookie_str[1:-1]
+            
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write("# Netscape HTTP Cookie File\n")
             f.write("# This file is generated dynamically from YOUTUBE_COOKIE\n")
             
             pairs = cookie_str.split(';')
             for pair in pairs:
+                pair = pair.strip()
                 if '=' not in pair:
                     continue
-                name, value = pair.strip().split('=', 1)
+                name, value = pair.split('=', 1)
+                name = name.strip()
+                value = value.strip()
                 # Domain, Include subdomains, Path, Secure, Expiration, Name, Value
                 f.write(f".youtube.com\tTRUE\t/\tTRUE\t0\t{name}\t{value}\n")
         return True
