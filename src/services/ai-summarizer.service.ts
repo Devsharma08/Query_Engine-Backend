@@ -50,6 +50,7 @@ ${chunkText}
                   temperature: 0.1,
                   num_predict: 150,
                   top_p: 0.9,
+                  num_ctx: 2048
                }
             });
             chunkSummaries.push(response.message.content.trim());
@@ -75,6 +76,7 @@ ${combinedSummaries}
                   temperature: 0.1,
                   num_predict: 200,
                   top_p: 0.9,
+                  num_ctx: 2048
                }
             });
             return finalResponse.message.content.trim();

@@ -1,29 +1,40 @@
 import { TimelineBlock } from './timeline.service';
-import { Ollama } from 'ollama';
-import { fetch as undiciFetch, Agent } from 'undici';
-
-const ollamaAgent = new Agent({
-  connectTimeout: 60000,
-  headersTimeout: 300000,
-  bodyTimeout: 300000,
-});
-
-const ollama = new Ollama({
-  host: process.env.OLLAMA_HOST || 'http://127.0.0.1:11434',
-  fetch: ((input: any, init: any) => undiciFetch(input, { ...init, dispatcher: ollamaAgent })) as any
-});
 
 export class EmbeddingService {
   /**
-   * Generates a single embedding vector for a given text using nomic-embed-text
+   * Generates a single embedding vector for a given text using Google's text-embedding-004 model
    */
   public async generateEmbedding(text: string): Promise<number[]> {
     try {
-      const response = await ollama.embeddings({
-        model: 'nomic-embed-text',
-        prompt: text,
-      });
-      return response.embedding;
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error("GEMINI_API_KEY environment variable is not defined.");
+      }
+
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            content: {
+              parts: [{ text }]
+            }
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json() as any;
+      if (data.embedding?.values) {
+        return data.embedding.values;
+      }
+      throw new Error("Invalid response format received from Gemini API");
     } catch (error: any) {
       console.error(`[EMBEDDING] Failed to generate embedding: ${error.message}`);
       return [];

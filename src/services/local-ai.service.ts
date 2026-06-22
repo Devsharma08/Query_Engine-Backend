@@ -55,7 +55,7 @@ async summarizeTranscript(
           temperature: 0.1,
           num_predict: 200,
           top_p: 0.9,
-          
+          num_ctx: 2048
         },
         stream:true
       });
@@ -174,6 +174,7 @@ Question: ${userQuestion}`
             temperature: 0.1,
             num_predict: 250,
             top_p: 0.9,
+            num_ctx: 2048
           },
           stream: true
         });

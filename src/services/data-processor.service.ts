@@ -38,6 +38,7 @@ Text:
         options: {
           temperature: 0.1,
           num_predict: 50,
+          num_ctx: 1024
         }
       });
 
@@ -160,7 +161,8 @@ Start Text:
           ],
           options: {
             temperature: 0.1,
-            num_predict: 15
+            num_predict: 15,
+            num_ctx: 1024
           }
         });
 
