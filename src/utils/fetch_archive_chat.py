@@ -111,7 +111,7 @@ def get_archived_chat_ytdlp(video_url, cookies_path=None, proxy_url=None, user_a
         
     try:
         # Build command options
-        cmd = ["yt-dlp", "--write-subs", "--sub-langs", "live_chat", "--skip-download", "--output", temp_output_prefix, "--remote-components", "ejs:github"]
+        cmd = ["yt-dlp", "--verbose", "--write-subs", "--sub-langs", "live_chat", "--skip-download", "--output", temp_output_prefix]
         if cookies_path:
             cmd.extend(["--cookies", cookies_path])
         if proxy_url:
@@ -143,7 +143,16 @@ def get_archived_chat(video_url):
     sys.stderr.flush()
 
     cookie_str = os.environ.get('YOUTUBE_COOKIE')
+    if cookie_str:
+        cookie_str = cookie_str.replace('\r', '').replace('\n', '').strip()
+        if cookie_str == '':
+            cookie_str = None
+
     proxy_url = os.environ.get('PROXY_URL')
+    if proxy_url:
+        proxy_url = proxy_url.replace('\r', '').replace('\n', '').strip()
+        if proxy_url == '':
+            proxy_url = None
     
     # If cookie is present, bypass the proxy to avoid rate limits / connection issues
     if cookie_str and proxy_url:
@@ -152,6 +161,8 @@ def get_archived_chat(video_url):
         proxy_url = None
         
     user_agent = os.environ.get('YOUTUBE_USER_AGENT')
+    if user_agent:
+        user_agent = user_agent.replace('\r', '').replace('\n', '').strip()
     if not user_agent:
         user_agent = "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Mobile Safari/537.36"
     
