@@ -111,7 +111,7 @@ def get_archived_chat_ytdlp(video_url, cookies_path=None, proxy_url=None, user_a
         
     try:
         # Build command options
-        cmd = ["yt-dlp", "--write-subs", "--sub-langs", "live_chat", "--skip-download", "--output", temp_output_prefix]
+        cmd = ["yt-dlp", "--write-subs", "--sub-langs", "live_chat", "--skip-download", "--output", temp_output_prefix, "--remote-components", "ejs:github"]
         if cookies_path:
             cmd.extend(["--cookies", cookies_path])
         if proxy_url:

@@ -8,7 +8,7 @@ RUN apk add --no-cache python3 py3-pip python3-dev build-base
 RUN python3 -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 
-RUN pip install --no-cache-dir chat-downloader yt-dlp
+RUN pip install --no-cache-dir chat-downloader "yt-dlp[default]"
 
 # setting up node working dir
 WORKDIR /app
