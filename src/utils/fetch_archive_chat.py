@@ -134,6 +134,14 @@ def get_archived_chat_ytdlp(video_url, cookies_path=None, proxy_url=None, user_a
             os.remove(expected_file)
 
 def get_archived_chat(video_url):
+    try:
+        res = subprocess.run(["node", "-v"], capture_output=True, text=True)
+        sys.stderr.write(f"[Python Scraper] Node version: {res.stdout.strip()} (err: {res.stderr.strip()})\n")
+    except Exception as e:
+        sys.stderr.write(f"[Python Scraper] Node check failed: {str(e)}\n")
+    sys.stderr.write(f"[Python Scraper] PATH: {os.environ.get('PATH')}\n")
+    sys.stderr.flush()
+
     cookie_str = os.environ.get('YOUTUBE_COOKIE')
     proxy_url = os.environ.get('PROXY_URL')
     
