@@ -104,7 +104,8 @@ export class YoutubeService{
          });
 
          const items:any = response.data.items || [];
-         
+         console.log(`[googleService.getAllPastLiveComments] API response status: ${response.status}, total items in response: ${items.length}`);
+          
          const parsed = items.map((item:any) => {
            const topComment = item.snippet?.topLevelComment?.snippet;
             return {

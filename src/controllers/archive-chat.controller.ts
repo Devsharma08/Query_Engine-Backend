@@ -76,6 +76,7 @@ export async function getChatOrComments(req: Request, res: Response): Promise<vo
       let isLiveStream = false;
       try {
          const videoDetails = await videoService.getVideoById(videoId);
+         console.log(`[archiveChatController.getChatOrComments] Video Details:`, JSON.stringify(videoDetails, null, 2));
          if (videoDetails.isLiveStream) {
             isLiveStream = true;
             if (videoDetails.isLiveStream.activeLiveChatId) {
