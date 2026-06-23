@@ -143,7 +143,7 @@ export async function getChatOrComments(req: Request, res: Response): Promise<vo
             type: 'standard_video_comments',
             totalCommentsScanned: regularComments.length,
             streamerCommentCount: streamerComments.length,
-            data: streamerComments
+            data: onlyStreamerChat ? streamerComments : regularComments
          });
       } catch (fallbackError: any) {
          console.warn("[archiveChatController.getChatOrComments] Fallback failed (comments may be disabled):", fallbackError.message);
