@@ -121,40 +121,70 @@ export async function getChatOrComments(req: Request, res: Response): Promise<vo
          fullPastChatLogs = [];
       }
 
-      if (Array.isArray(fullPastChatLogs) && fullPastChatLogs.length > 0) {
-         const streamerOnly = fullPastChatLogs.filter((msg: any) => msg.is_streamer);
-         res.json({
-            type: "live chat replay",
-            totalChatCount: fullPastChatLogs.length,
-            streamerCommentCount: streamerOnly.length,
-            streamerTimeline: streamerOnly
-         });
-         return;
-      }
-
-      // Fallback: Fetch standard comments via YouTube API
+      // Fetch standard comments via YouTube API
+      let regularComments: any[] = [];
       try {
-         console.log(`[archiveChatController.getChatOrComments] Fallback: Fetching standard comments for ${videoId}`);
+         console.log(`[archiveChatController.getChatOrComments] Fetching standard comments for ${videoId}`);
          const streamerChannelId = channelLink ? generateChannelId(channelLink) : undefined;
-         const regularComments = await videoService.getAllPastLiveComments(videoId, streamerChannelId);
-         const streamerComments = regularComments.filter((c: any) => c.isStreamer);
-
-         res.json({
-            type: 'standard_video_comments',
-            totalCommentsScanned: regularComments.length,
-            streamerCommentCount: streamerComments.length,
-            data: onlyStreamerChat ? streamerComments : regularComments
-         });
+         regularComments = await videoService.getAllPastLiveComments(videoId, streamerChannelId);
       } catch (fallbackError: any) {
-         console.warn("[archiveChatController.getChatOrComments] Fallback failed (comments may be disabled):", fallbackError.message);
-         res.json({
-            type: 'standard_video_comments_disabled',
-            totalCommentsScanned: 0,
-            streamerCommentCount: 0,
-            data: [],
-            warning: fallbackError.message
-         });
+         console.warn("[archiveChatController.getChatOrComments] Failed to fetch standard comments:", fallbackError.message);
       }
+
+      // Normalize and combine standard comments & live chat logs
+      const parseDate = (dStr: string) => {
+         const t = Date.parse(dStr);
+         return isNaN(t) ? null : t;
+      };
+
+      const parsedPastChat = Array.isArray(fullPastChatLogs) 
+         ? fullPastChatLogs.map((c: any) => ({
+            id: c.id || undefined,
+            author: c.author || '',
+            message: c.message || '',
+            timestamp: c.timestamp ? Number(c.timestamp) : null,
+            timeInVideo: c.time_in_video ? Number(c.time_in_video) : null,
+            isStreamer: !!c.is_streamer,
+            source: 'live_chat',
+            replies: []
+         }))
+         : [];
+
+      const parsedRegularComments = Array.isArray(regularComments)
+         ? regularComments.map((c: any) => ({
+            id: c.id || undefined,
+            author: c.author || '',
+            message: c.message || '',
+            timestamp: c.publishedAt ? parseDate(c.publishedAt) : null,
+            timeInVideo: null,
+            isStreamer: !!c.isStreamer,
+            source: 'standard_comment',
+            replies: c.replies || []
+         }))
+         : [];
+
+      let combinedComments = [...parsedPastChat, ...parsedRegularComments];
+
+      // Sort chronologically by timestamp
+      combinedComments.sort((a, b) => {
+         const tA = a.timestamp !== null ? a.timestamp : 0;
+         const tB = b.timestamp !== null ? b.timestamp : 0;
+         return tA - tB;
+      });
+
+      // Filter by streamer if requested
+      if (onlyStreamerChat) {
+         combinedComments = combinedComments.filter(c => c.isStreamer);
+      }
+
+      const streamerComments = combinedComments.filter(c => c.isStreamer);
+
+      res.json({
+         type: isLiveStream ? 'mixed_live_chat_and_comments' : 'standard_video_comments',
+         totalCommentsScanned: combinedComments.length,
+         streamerCommentCount: streamerComments.length,
+         data: combinedComments
+      });
 
    } catch (error: any) {
       console.error("[archiveChatController.getChatOrComments] Crash:", error);
