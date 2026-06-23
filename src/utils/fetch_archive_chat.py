@@ -121,7 +121,9 @@ def get_archived_chat_ytdlp(video_url, cookies_path=None, proxy_url=None, user_a
         cmd.append(video_url)
         
         # Run yt-dlp using subprocess
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise Exception(f"yt-dlp execution failed (code {result.returncode}): {result.stderr.strip()}")
         
         if not os.path.exists(expected_file):
             raise Exception("yt-dlp execution did not generate a live chat JSON file")
@@ -134,6 +136,13 @@ def get_archived_chat_ytdlp(video_url, cookies_path=None, proxy_url=None, user_a
 def get_archived_chat(video_url):
     cookie_str = os.environ.get('YOUTUBE_COOKIE')
     proxy_url = os.environ.get('PROXY_URL')
+    
+    # If cookie is present, bypass the proxy to avoid rate limits / connection issues
+    if cookie_str and proxy_url:
+        sys.stderr.write("[Python Scraper] Cookie is present. Bypassing PROXY_URL.\n")
+        sys.stderr.flush()
+        proxy_url = None
+        
     user_agent = os.environ.get('YOUTUBE_USER_AGENT')
     if not user_agent:
         user_agent = "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Mobile Safari/537.36"
