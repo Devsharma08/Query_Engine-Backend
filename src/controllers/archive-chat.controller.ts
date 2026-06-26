@@ -49,7 +49,7 @@ export async function getPastStreamerChat(url: string): Promise<any[]> {
       const youtube = await Innertube.create(config);
       
       console.log(`[archiveChatController.getPastStreamerChat] Fetching info for stream VOD: ${videoId}`);
-      const videoInfo = await youtube.getInfo(videoId);
+      const videoInfo: any = await youtube.getInfo(videoId);
       
       if (!videoInfo.has_live_chat) {
          console.log(`[archiveChatController.getPastStreamerChat] No historical live chat replay track found for video ${videoId}.`);
@@ -57,7 +57,7 @@ export async function getPastStreamerChat(url: string): Promise<any[]> {
       }
 
       console.log(`[archiveChatController.getPastStreamerChat] Live chat stream found. Pulling replay chunks...`);
-      const liveChat = await videoInfo.getLiveChat();
+      const liveChat: any = await videoInfo.getLiveChat();
       const chatLogs: any[] = [];
 
       if (liveChat.initial_data && liveChat.initial_data.actions) {
