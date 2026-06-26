@@ -1,6 +1,6 @@
 import { Ollama } from 'ollama';
 import { fetch as undiciFetch, Agent } from 'undici';
-import { cosineSimilarity } from '../utils/youtube-parser';
+import { cosineSimilarity, detectLanguage, translateText } from '../utils/youtube-parser';
 
 const ollamaAgent = new Agent({
   connectTimeout: 60000,
@@ -78,6 +78,18 @@ export class DataProcessorService {
   }
 
   public async extractKeywords(text: string, maxTags: number = 8): Promise<string[]> {
+    let workingText = text;
+    try {
+      const sample = text.substring(0, 1000);
+      const { language } = detectLanguage(sample);
+      if (language !== 'en') {
+        console.log(`[DataProcessorService] Non-English language detected: "${language}". Translating first 8000 chars for keyword extraction...`);
+        workingText = await translateText(text.substring(0, 8000), 'en');
+      }
+    } catch (langErr: any) {
+      console.warn(`[DataProcessorService] Language detection or translation failed, using original text:`, langErr.message);
+    }
+
     const stopWords = new Set([
       'the', 'is', 'and', 'a', 'to', 'in', 'it', 'you', 'of', 'for', 'on', 'with', 
       'this', 'that', 'by', 'an', 'your', 'from', 'we', 'are', 'i', 'me', 'my',
@@ -92,11 +104,17 @@ export class DataProcessorService {
       'too', 'your', 'mine', 'her', 'his', 'its', 'us', 'our', 'them', 'theirs',
       'went', 'came', 'said', 'told', 'took', 'asked', 'called', 'made', 'saw', 'gave',
       'lived', 'upon', 'time', 'away', 'back', 'come', 'next', 'then', 'into', 'some',
-      'down', 'first', 'about', 'again', 'very', 'must', 'should', 'would', 'could'
+      'down', 'first', 'about', 'again', 'very', 'must', 'should', 'would', 'could',
+      'guys', 'hello', 'hey', 'hi', 'everyone', 'ok', 'okay', 'yeah', 'yes', 'no', 'sure',
+      'thank', 'thanks', 'please', 'well', 'right', 'really', 'basically', 'actually', 
+      'sort', 'kind', 'maybe', 'probably', 'definitely', 'mean', 'like', 'stuff', 'thing', 
+      'things', 'something', 'anything', 'nothing', 'someone', 'anyone', 'everyone',
+      'talk', 'talking', 'tell', 'telling', 'say', 'saying', 'speak', 'speaking',
+      'video', 'channel', 'subscribe', 'like', 'comment', 'share', 'stream', 'live'
     ]);
 
-    // Build frequency map from the entire text
-    const words = text
+    // Build frequency map from the working text
+    const words = workingText
       .toLowerCase()
       .replace(/\[[^\]]*\]/g, "")
       .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"']/g, "")
@@ -164,7 +182,7 @@ export class DataProcessorService {
       try {
         console.log(`[DataProcessorService] running semantic cosine similarity tagging for ${candidates.length} candidates...`);
         // We use the first 1,500 characters of the transcript as the anchor topic description
-        const anchorText = text.substring(0, 1500).trim();
+        const anchorText = workingText.substring(0, 1500).trim();
         const anchorEmbedding = await this.generateEmbedding(anchorText);
 
         if (anchorEmbedding && anchorEmbedding.length > 0) {

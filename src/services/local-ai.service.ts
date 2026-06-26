@@ -55,7 +55,7 @@ async summarizeTranscript(
           temperature: 0.1,
           num_predict: 200,
           top_p: 0.9,
-          num_ctx: 2048
+          num_ctx: 4096
         },
         stream:true
       });
@@ -119,10 +119,10 @@ async summarizeTranscript(
       try {
         let targetedContext = transcriptText.trim();
   
-        // Only run sentence-level keyword filtering if the input is a large full-length raw transcript.
-        // If it is pre-selected blocks (under 8,000 characters), pass it directly to preserve full context.
+        // Only run keyword-based sliding window retrieval if the input is a large raw transcript.
+        // If it is pre-selected blocks (under 8,000 characters), pass it directly.
         if (transcriptText.length > 8000) {
-          const stopWords = new Set(['who', 'what', 'where', 'how', 'why', 'is', 'are', 'was', 'were', 'the', 'a', 'an', 'to', 'for', 'in', 'on', 'of', 'and', 'but', 'or', 'you', 'your', 'he', 'she', 'they', 'it', 'did', 'do', 'does']);
+          const stopWords = new Set(['who', 'what', 'where', 'how', 'why', 'is', 'are', 'was', 'were', 'the', 'a', 'an', 'to', 'for', 'in', 'on', 'of', 'and', 'but', 'or', 'you', 'your', 'he', 'she', 'they', 'it', 'did', 'do', 'does', 'about', 'would', 'should', 'could', 'tell', 'me', 'explain', 'discuss']);
           
           const searchTerms = userQuestion.toLowerCase()
             .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"']/g, "")
@@ -130,19 +130,53 @@ async summarizeTranscript(
             .filter(word => word.length >= 3 && !stopWords.has(word));
   
           if (searchTerms.length > 0) {
-            const sentences = transcriptText.split(/[.!?\n]+/);
-            const matchingSnippets = sentences.filter(sentence => 
-              searchTerms.some(term => sentence.toLowerCase().includes(term))
-            ).slice(0, 20);
-  
-            targetedContext = matchingSnippets.join('. ').trim();
+            const words = transcriptText.split(/\s+/);
+            const chunkSize = 150; // words
+            const overlap = 50;    // words
+            const chunks: string[] = [];
+
+            for (let i = 0; i < words.length; i += (chunkSize - overlap)) {
+              const chunkWords = words.slice(i, i + chunkSize);
+              chunks.push(chunkWords.join(' '));
+              if (i + chunkSize >= words.length) break;
+            }
+
+            const scoredChunks = chunks.map(chunk => {
+              const chunkLower = chunk.toLowerCase();
+              let score = 0;
+              let matchedUniqueTerms = 0;
+
+              searchTerms.forEach(term => {
+                const regex = new RegExp(term.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'g');
+                const matches = chunkLower.match(regex);
+                if (matches) {
+                  score += matches.length; // Add frequency count
+                  matchedUniqueTerms += 1;
+                }
+              });
+
+              // Boost score significantly if multiple unique keywords co-occur in the same chunk
+              if (matchedUniqueTerms > 1) {
+                score *= (1 + (matchedUniqueTerms * 0.5));
+              }
+
+              return { chunk, score };
+            });
+
+            // Sort by score descending and select the top 3 chunks
+            scoredChunks.sort((a, b) => b.score - a.score);
+            const topChunks = scoredChunks
+              .filter(item => item.score > 0)
+              .slice(0, 3)
+              .map(item => item.chunk);
+
+            targetedContext = topChunks.join('\n\n').trim();
           }
 
-          // Resilient Fallback: If no sentences matched the keywords (e.g. spelling typo like "alladin" vs "aladdin" or general question),
-          // take a larger slice of the transcript so we don't return an empty context.
+          // Resilient Fallback: If no chunks matched, take the first 6,000 characters
           if (!targetedContext) {
-            console.log(`[localAi.queryVideoContext] No matches for search terms ${JSON.stringify(searchTerms)}. Falling back to first 30000 chars of transcript.`);
-            targetedContext = transcriptText.substring(0, 30000).trim();
+            console.log(`[localAi.queryVideoContext] No matches for search terms ${JSON.stringify(searchTerms)}. Falling back to first 6000 chars of transcript.`);
+            targetedContext = transcriptText.substring(0, 6000).trim();
           }
         }
   
