@@ -2,7 +2,7 @@
 FROM node:22-alpine
 
 # install python,pip and virtualenv tools
-RUN apk add --no-cache python3 py3-pip python3-dev build-base
+RUN apk add --no-cache python3 py3-pip python3-dev build-base deno
 
 # setting up virtual env and installing dep.
 RUN python3 -m venv /opt/venv
