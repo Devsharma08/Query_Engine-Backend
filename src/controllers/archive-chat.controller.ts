@@ -1,62 +1,113 @@
 import { Request, Response } from 'express';
-import { spawn } from 'child_process';
-import * as fs from 'fs';
-import * as path from 'path';
 import { extractVideoId, generateChannelId } from '../utils/youtube-parser';
 import { YoutubeService } from '../services/google.service';
+import { Innertube, Platform } from 'youtubei.js';
+import { ProxyAgent } from 'undici';
 
 const videoService = new YoutubeService();
 
 /**
- * Runs Python sub-process to pull live chat replays for completed streams using chat-downloader.
+ * Fetches live chat replays natively using youtubei.js.
  */
 export async function getPastStreamerChat(url: string): Promise<any[]> {
-   return new Promise((resolve, reject) => {
-      let pythonPath = 'python';
-      const venvWin = path.join(process.cwd(), '..', '.venv', 'Scripts', 'python.exe');
-      const venvUnix = path.join(process.cwd(), '..', '.venv', 'bin', 'python');
+   const videoId = extractVideoId(url);
+   if (!videoId) {
+      console.warn(`[archiveChatController.getPastStreamerChat] Invalid video URL: ${url}`);
+      return [];
+   }
 
-      if (fs.existsSync(venvWin)) {
-         pythonPath = venvWin;
-      } else if (fs.existsSync(venvUnix)) {
-         pythonPath = venvUnix;
+   try {
+      console.log(`[archiveChatController.getPastStreamerChat] Initializing InnerTube client for video: ${videoId}`);
+      
+      const config: any = {
+         lang: 'en',
+         location: 'US',
+      };
+
+      const youtubeCookie = process.env.YOUTUBE_COOKIE;
+      if (youtubeCookie) {
+         const cleanCookie = youtubeCookie.replace(/^["']|["']$/g, "").replace(/[\r\n]+/g, "").trim();
+         if (cleanCookie) {
+            config.cookie = cleanCookie;
+         }
       }
 
-      const pythonProcess = spawn(pythonPath, [
-         'src/utils/fetch_archive_chat.py',
-         url
-      ]);
-
-      const timeoutId = setTimeout(() => {
-         console.warn(`[archiveChatController.getPastStreamerChat] Python execution timed out. Terminating.`);
-         pythonProcess.kill();
-         reject(new Error('Python execution timed out'));
-      }, 10000);
-
-      let resultData = '';
-      pythonProcess.stdout.on('data', (data) => {
-         resultData += data.toString();
-      });
-
-      pythonProcess.stderr.on('data', (code) => {
-         console.error('[archiveChatController.getPastStreamerChat] Script stderr:', code.toString());
-      });
-
-      pythonProcess.on('close', (code) => {
-         clearTimeout(timeoutId);
-         if (code !== 0) {
-            reject(new Error(`python script exited with code ${code}`));
-            return;
+      const proxyUrl = process.env.PROXY_URL;
+      if (proxyUrl && !youtubeCookie) {
+         const cleanProxy = proxyUrl.replace(/^["']|["']$/g, "").replace(/[\r\n]+/g, "").trim();
+         if (cleanProxy) {
+            const proxyAgent = new ProxyAgent(cleanProxy);
+            config.fetch = (input: any, init: any) => {
+               return Platform.shim.fetch(input, {
+                  ...init,
+                  dispatcher: proxyAgent
+               });
+            };
          }
-         try {
-            const comments = JSON.parse(resultData);
-            resolve(comments);
-         } catch (parseError) {
-            console.error('[archiveChatController.getPastStreamerChat] JSON Parse error:', parseError);
-            reject(new Error('Failed to parse comments'));
+      }
+
+      const youtube = await Innertube.create(config);
+      
+      console.log(`[archiveChatController.getPastStreamerChat] Fetching info for stream VOD: ${videoId}`);
+      const videoInfo = await youtube.getInfo(videoId);
+      
+      if (!videoInfo.has_live_chat) {
+         console.log(`[archiveChatController.getPastStreamerChat] No historical live chat replay track found for video ${videoId}.`);
+         return [];
+      }
+
+      console.log(`[archiveChatController.getPastStreamerChat] Live chat stream found. Pulling replay chunks...`);
+      const liveChat = await videoInfo.getLiveChat();
+      const chatLogs: any[] = [];
+
+      if (liveChat.initial_data && liveChat.initial_data.actions) {
+         for (const action of liveChat.initial_data.actions) {
+            const replayAction = action.replay_item_action_renderer;
+            if (!replayAction) continue;
+            
+            const actionsList = replayAction.actions || [];
+            for (const act of actionsList) {
+               const item = act.add_chat_item_action?.item;
+               if (!item) continue;
+               
+               const msgRenderer = item.live_chat_text_message_renderer;
+               if (msgRenderer) {
+                  const messageText = msgRenderer.message?.runs?.map((r: any) => r.text).join('') || '';
+                  const author = msgRenderer.author_name?.simple_text || 'Anonymous';
+                  const offsetMsec = replayAction.video_offset_time_msec;
+                  const timeInSeconds = offsetMsec ? Number(offsetMsec) / 1000 : null;
+                  const timestampUsec = msgRenderer.timestamp_usec;
+                  const timestamp = timestampUsec ? Number(timestampUsec) / 1000 : null;
+
+                  const badges = msgRenderer.author_badges || [];
+                  let isStreamer = false;
+                  for (const badge of badges) {
+                     const badgeRenderer = badge.live_chat_author_badge_renderer;
+                     if (badgeRenderer?.icon?.icon_type === 'OWNER') {
+                        isStreamer = true;
+                        break;
+                     }
+                  }
+
+                  chatLogs.push({
+                     timestamp: timestamp,
+                     time_in_video: timeInSeconds,
+                     author: author,
+                     message: messageText,
+                     is_streamer: isStreamer
+                  });
+               }
+            }
          }
-      });
-   });
+      }
+
+      console.log(`[archiveChatController.getPastStreamerChat] Successfully retrieved ${chatLogs.length} live chat replay logs natively.`);
+      return chatLogs;
+
+   } catch (error) {
+      console.error(`[archiveChatController.getPastStreamerChat Internal Error] Native JS extraction failed:`, error);
+      return [];
+   }
 }
 
 /**
