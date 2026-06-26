@@ -120,48 +120,24 @@ export async function getChatOrComments(req: Request, res: Response): Promise<vo
       const streamerChannelId = channelLink ? generateChannelId(channelLink) : undefined;
 
       if (metadataFetched) {
-         const isLive = isLiveStream;
-         const hasComments = commentCount > 0;
-
-         if (!isLive && !hasComments) {
-            console.log(`[archiveChatController.getChatOrComments] Standard video with 0 comments. Returning empty array.`);
-            res.json({
-               type: 'standard_video_comments',
-               totalCommentsScanned: 0,
-               streamerCommentCount: 0,
-               data: []
-            });
-            return;
-         }
-
-         if (isLive) {
-            // Live stream (active fallback or completed)
+         if (isLiveStream) {
+            // livestream: fetch live chat replay via Python scraper
             try {
-               console.log(`[archiveChatController.getChatOrComments] Video is a livestream (${liveStatus}). Invoking python scraper.`);
+               console.log(`[archiveChatController.getChatOrComments] Video is a livestream. Invoking python scraper.`);
                fullPastChatLogs = await getPastStreamerChat(url);
             } catch (error: any) {
                console.warn(`[archiveChatController.getChatOrComments] Could not fetch chat replay: ${error.message}`);
             }
-
-            if (hasComments) {
-               try {
-                  console.log(`[archiveChatController.getChatOrComments] Fetching standard comments for ${videoId} (commentCount: ${commentCount})`);
-                  regularComments = await videoService.getAllPastLiveComments(videoId, streamerChannelId);
-               } catch (fallbackError: any) {
-                  console.warn("[archiveChatController.getChatOrComments] Failed to fetch standard comments:", fallbackError.message);
-               }
-            } else {
-               console.log(`[archiveChatController.getChatOrComments] Skipping standard comments fetch since commentCount is 0.`);
-            }
          } else {
-            // Standard video with comments: skip scraper entirely
             console.log(`[archiveChatController.getChatOrComments] Video is standard VOD. Skipping Python scraper.`);
-            try {
-               console.log(`[archiveChatController.getChatOrComments] Fetching standard comments for ${videoId} (commentCount: ${commentCount})`);
-               regularComments = await videoService.getAllPastLiveComments(videoId, streamerChannelId);
-            } catch (fallbackError: any) {
-               console.warn("[archiveChatController.getChatOrComments] Failed to fetch standard comments:", fallbackError.message);
-            }
+         }
+
+         // Always attempt to fetch standard comments via YouTube API
+         try {
+            console.log(`[archiveChatController.getChatOrComments] Fetching standard comments for ${videoId}`);
+            regularComments = await videoService.getAllPastLiveComments(videoId, streamerChannelId);
+         } catch (fallbackError: any) {
+            console.warn("[archiveChatController.getChatOrComments] Failed to fetch standard comments:", fallbackError.message);
          }
       } else {
          // Fallback logic when API metadata check fails
