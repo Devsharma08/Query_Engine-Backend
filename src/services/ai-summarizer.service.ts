@@ -88,4 +88,4 @@ ${combinedSummaries}
          return "This video covers key concepts broken down across the timeline milestones detailed below.";
       }
    }
-}
+}

@@ -1,6 +1,7 @@
 import { Ollama } from 'ollama';
 import { fetch as undiciFetch, Agent } from 'undici';
 import { TimelineBlock } from "./timeline.service";
+import { cosineSimilarity } from "../utils/youtube-parser";
 
 const ollamaAgent = new Agent({
   connectTimeout: 60000,
@@ -60,22 +61,6 @@ export class SearchService {
   }
 
   /**
-   * Computes the cosine similarity metric between two vectors.
-   */
-  private cosineSimilarity(vecA: number[], vecB: number[]): number {
-    let dotProduct = 0.0;
-    let normA = 0.0;
-    let normB = 0.0;
-    for (let i = 0; i < vecA.length; i++) {
-      dotProduct += vecA[i] * vecB[i];
-      normA += vecA[i] * vecA[i];
-      normB += vecB[i] * vecB[i];
-    }
-    if (normA === 0 || normB === 0) return 0;
-    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-  }
-
-  /**
    * Performs semantic vector search on blocks using text embeddings.
    * 
    * @param blocks List of timeline blocks to search through
@@ -102,7 +87,7 @@ export class SearchService {
         if (!block.embedding) {
           return { block, score: 0 };
         }
-        const score = this.cosineSimilarity(queryEmbedding, block.embedding);
+        const score = cosineSimilarity(queryEmbedding, block.embedding);
         return { block, score };
       })
       // Only keep blocks that pass a threshold of 0.35 similarity

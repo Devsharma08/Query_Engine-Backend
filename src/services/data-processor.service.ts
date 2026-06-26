@@ -1,5 +1,6 @@
 import { Ollama } from 'ollama';
 import { fetch as undiciFetch, Agent } from 'undici';
+import { cosineSimilarity } from '../utils/youtube-parser';
 
 const ollamaAgent = new Agent({
   connectTimeout: 60000,
@@ -21,40 +22,62 @@ export interface TimelineSegment {
 export class DataProcessorService {
   private modelName = 'gemma3:1b';
 
-  public async extractKeywords(text: string, maxTags: number = 8): Promise<string[]> {
-    try {
-      // Use local LLM to extract keywords from the text (works best when text is the summary)
-      const response = await ollama.chat({
-        model: this.modelName,
-        messages: [
-          {
-            role: 'user',
-            content: `Instructions: Extract up to 8 key nouns, topics, or character names from the text below. Return ONLY a comma-separated list of these words. Do not include conversational remarks, introduction, or formatting (e.g. return: "aladdin, gold, thieves").
+  private async generateEmbedding(text: string): Promise<number[]> {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error("GEMINI_API_KEY is not defined");
 
-Text:
-"${text.substring(0, 1000)}"`
-          }
-        ],
-        options: {
-          temperature: 0.1,
-          num_predict: 50,
-          num_ctx: 1024
-        }
-      });
-
-      const extracted = response.message.content
-        .split(',')
-        .map(t => t.replace(/[.#*_\-\"\']/g, "").trim().toLowerCase())
-        .filter(t => t.length > 2 && t.length < 20 && !t.includes(' '));
-
-      if (extracted.length > 0) {
-        return extracted.slice(0, maxTags);
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: { parts: [{ text }] }
+        })
       }
-    } catch (err: any) {
-      console.warn('[DataProcessorService] AI keyword extraction failed, using fallback:', err.message);
+    );
+
+    if (!response.ok) {
+      throw new Error(`Gemini embed failed: status ${response.status}`);
     }
 
-    // Fallback: rule-based word frequency check
+    const data = await response.json() as any;
+    if (data.embedding?.values) {
+      return data.embedding.values;
+    }
+    throw new Error("Invalid response format received from Gemini API");
+  }
+
+  private async generateEmbeddingsBatch(texts: string[]): Promise<number[][]> {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error("GEMINI_API_KEY is not defined");
+
+    const requests = texts.map(text => ({
+      model: "models/gemini-embedding-001",
+      content: { parts: [{ text }] }
+    }));
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requests })
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Gemini batch embed failed: status ${response.status}`);
+    }
+
+    const data = await response.json() as any;
+    if (Array.isArray(data.embeddings)) {
+      return data.embeddings.map((e: any) => e.values || []);
+    }
+    throw new Error("Invalid response format received from Gemini batch embedding API");
+  }
+
+  public async extractKeywords(text: string, maxTags: number = 8): Promise<string[]> {
     const stopWords = new Set([
       'the', 'is', 'and', 'a', 'to', 'in', 'it', 'you', 'of', 'for', 'on', 'with', 
       'this', 'that', 'by', 'an', 'your', 'from', 'we', 'are', 'i', 'me', 'my',
@@ -72,6 +95,7 @@ Text:
       'down', 'first', 'about', 'again', 'very', 'must', 'should', 'would', 'could'
     ]);
 
+    // Build frequency map from the entire text
     const words = text
       .toLowerCase()
       .replace(/\[[^\]]*\]/g, "")
@@ -79,16 +103,134 @@ Text:
       .split(/\s+/);
 
     const frequencyMap: Record<string, number> = {};
-
     words.forEach(word => {
       if (word.length > 3 && !stopWords.has(word)) {
         frequencyMap[word] = (frequencyMap[word] || 0) + 1;
       }
     });
 
-    return Object.keys(frequencyMap)
-      .sort((a, b) => frequencyMap[b] - frequencyMap[a])
-      .slice(0, maxTags);
+    const sortedWords = Object.keys(frequencyMap).sort((a, b) => frequencyMap[b] - frequencyMap[a]);
+
+    if (sortedWords.length === 0) {
+      return [];
+    }
+
+    // Select candidate words representing a target percentage split (50% High, 30% Mid, 20% Low)
+    // Target candidate pool size: 30 words
+    const poolSize = 30;
+    const highTarget = Math.round(poolSize * 0.5); // 15
+    const midTarget = Math.round(poolSize * 0.3);  // 9
+    const lowTarget = Math.round(poolSize * 0.2);  // 6
+
+    let candidates: string[] = [];
+    const totalWordsCount = sortedWords.length;
+
+    if (totalWordsCount <= poolSize) {
+      candidates = sortedWords;
+    } else {
+      // 1. High frequency band (sample 15 from the top 20 unique words)
+      const highPool = sortedWords.slice(0, 20);
+      const highPicks: string[] = [];
+      const highStep = Math.max(1, Math.floor(highPool.length / highTarget));
+      for (let i = 0; i < highTarget && i * highStep < highPool.length; i++) {
+        highPicks.push(highPool[i * highStep]);
+      }
+
+      // 2. Mid frequency band (sample 9 from the middle 30 unique words)
+      const midStart = Math.max(20, Math.floor(totalWordsCount / 2) - 15);
+      const midEnd = Math.min(midStart + 30, totalWordsCount);
+      const midPool = sortedWords.slice(midStart, midEnd);
+      const midPicks: string[] = [];
+      const midStep = Math.max(1, Math.floor(midPool.length / midTarget));
+      for (let i = 0; i < midTarget && i * midStep < midPool.length; i++) {
+        midPicks.push(midPool[i * midStep]);
+      }
+
+      // 3. Low frequency band (sample 6 from the bottom 30 unique words with frequency >= 2)
+      const lowPoolFiltered = sortedWords.filter(w => frequencyMap[w] >= 2);
+      const lowPool = lowPoolFiltered.slice(-30);
+      const lowPicks: string[] = [];
+      const lowStep = Math.max(1, Math.floor(lowPool.length / lowTarget));
+      for (let i = 0; i < lowTarget && i * lowStep < lowPool.length; i++) {
+        lowPicks.push(lowPool[i * lowStep]);
+      }
+
+      candidates = Array.from(new Set([...highPicks, ...midPicks, ...lowPicks]));
+    }
+
+    // Semantic Vector Filtering using Cosine Similarity against the introduction anchor context
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (apiKey && candidates.length > 0) {
+      try {
+        console.log(`[DataProcessorService] running semantic cosine similarity tagging for ${candidates.length} candidates...`);
+        // We use the first 1,500 characters of the transcript as the anchor topic description
+        const anchorText = text.substring(0, 1500).trim();
+        const anchorEmbedding = await this.generateEmbedding(anchorText);
+
+        if (anchorEmbedding && anchorEmbedding.length > 0) {
+          const candidateEmbeddings = await this.generateEmbeddingsBatch(candidates);
+          
+          const scoredCandidates = candidates.map((word, index) => {
+            const wordEmbedding = candidateEmbeddings[index];
+            if (!wordEmbedding || wordEmbedding.length === 0) {
+              return { word, score: 0 };
+            }
+            const score = cosineSimilarity(anchorEmbedding, wordEmbedding);
+            return { word, score };
+          });
+
+          // Sort by similarity descending
+          scoredCandidates.sort((a, b) => b.score - a.score);
+          console.log(`[DataProcessorService] top semantic candidates:`, JSON.stringify(scoredCandidates.slice(0, 8), null, 2));
+
+          const resultTags = scoredCandidates
+            .slice(0, maxTags)
+            .map(item => item.word);
+
+          if (resultTags.length > 0) {
+            return resultTags;
+          }
+        }
+      } catch (embedError: any) {
+        console.warn(`[DataProcessorService] Semantic embedding selection failed, falling back to local LLM:`, embedError.message);
+      }
+    }
+
+    // Fallback: local LLM prompt based cleanup on candidates list
+    try {
+      console.log(`[DataProcessorService] Fallback to local LLM keyword selection...`);
+      const response = await ollama.chat({
+        model: this.modelName,
+        messages: [
+          {
+            role: 'user',
+            content: `Instructions: You are given a list of candidate words extracted from a video transcript. Filter out any common words, general verbs, adjectives, or conversational elements. Select and format up to 8 of the most relevant, descriptive nouns, topics, or names. Return ONLY a comma-separated list of these words. Do not include conversational remarks, introduction, or formatting (e.g. return: "aladdin, gold, thieves").
+
+Candidate Words:
+"${candidates.join(', ')}"`
+          }
+        ],
+        options: {
+          temperature: 0.1,
+          num_predict: 50,
+          num_ctx: 2048
+        }
+      });
+
+      const extracted = response.message.content
+        .split(',')
+        .map(t => t.replace(/[.#*_\-\"\']/g, "").trim().toLowerCase())
+        .filter(t => t.length > 2 && t.length < 20 && !t.includes(' '));
+
+      if (extracted.length > 0) {
+        return extracted.slice(0, maxTags);
+      }
+    } catch (err: any) {
+      console.warn('[DataProcessorService] Fallback local LLM keyword extraction failed, using raw frequency:', err.message);
+    }
+
+    // Ultimate Fallback: Return raw top high frequency words
+    return sortedWords.slice(0, maxTags);
   }
 
   public async generateAutoChapters(segments: TimelineSegment[]): Promise<{ timestamp: string; seconds: number; highlightText: string }[]> {
