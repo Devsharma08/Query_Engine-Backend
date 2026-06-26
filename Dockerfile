@@ -1,5 +1,5 @@
 # using nodejs alpine image
-FROM node:20-alpine
+FROM node:22-alpine
 
 # install python,pip and virtualenv tools
 RUN apk add --no-cache python3 py3-pip python3-dev build-base
