@@ -147,7 +147,31 @@ export class YoutubeService{
     }
   }
 
-   
+   /**
+    * Resolves a YouTube @handle to a proper UC... channel ID
+    * using channels.list with forHandle parameter.
+    */
+   async resolveHandleToChannelId(handle: string): Promise<string | null> {
+      try {
+         const res = await this.youtube.channels.list({
+            part: ['id'],
+            forHandle: handle,
+            maxResults: 1
+         });
+
+         const channelId = res.data.items?.[0]?.id;
+         if (channelId) {
+            console.log(`[YoutubeService.resolveHandleToChannelId] @${handle} -> ${channelId}`);
+            return channelId;
+         }
+         
+         console.warn(`[YoutubeService.resolveHandleToChannelId] No channel found for @${handle}`);
+         return null;
+      } catch (error: any) {
+         console.error(`[YoutubeService.resolveHandleToChannelId] Error resolving @${handle}:`, error.message);
+         throw error;
+      }
+   }
 
 }
 
