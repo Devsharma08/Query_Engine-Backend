@@ -74,11 +74,19 @@ export async function getChatOrComments(req: Request, res: Response): Promise<vo
 
       let activeLiveChatId: string | null = null;
       let isLiveStream = false;
+      let liveStatus: string | null = null;
+      let commentCount = 0;
+      let videoDetails: any = null;
+      let metadataFetched = false;
+
       try {
-         const videoDetails = await videoService.getVideoById(videoId);
+         videoDetails = await videoService.getVideoById(videoId);
          console.log(`[archiveChatController.getChatOrComments] Video Details:`, JSON.stringify(videoDetails, null, 2));
+         metadataFetched = true;
+         commentCount = videoDetails.commentCount ? Number(videoDetails.commentCount) : 0;
          if (videoDetails.isLiveStream) {
             isLiveStream = true;
+            liveStatus = videoDetails.isLiveStream.status;
             if (videoDetails.isLiveStream.activeLiveChatId) {
                activeLiveChatId = videoDetails.isLiveStream.activeLiveChatId;
             }
@@ -107,29 +115,65 @@ export async function getChatOrComments(req: Request, res: Response): Promise<vo
          }
       }
 
-      // If completed live stream, fetch logs using local Python downloader
       let fullPastChatLogs: any = [];
-      if (isLiveStream) {
+      let regularComments: any[] = [];
+      const streamerChannelId = channelLink ? generateChannelId(channelLink) : undefined;
+
+      if (metadataFetched) {
+         if (isLiveStream && (liveStatus === 'completed' || liveStatus === 'live')) {
+            // Completed (or active fallback) livestream: fetch replay using Python scraper
+            try {
+               console.log(`[archiveChatController.getChatOrComments] Video is a livestream (${liveStatus}). Invoking python scraper.`);
+               fullPastChatLogs = await getPastStreamerChat(url);
+            } catch (error: any) {
+               console.warn(`[archiveChatController.getChatOrComments] Could not fetch chat replay: ${error.message}`);
+            }
+
+            // Fetch standard comments via YouTube API only if commentCount > 0
+            if (commentCount > 0) {
+               try {
+                  console.log(`[archiveChatController.getChatOrComments] Fetching standard comments for ${videoId} (commentCount: ${commentCount})`);
+                  regularComments = await videoService.getAllPastLiveComments(videoId, streamerChannelId);
+               } catch (fallbackError: any) {
+                  console.warn("[archiveChatController.getChatOrComments] Failed to fetch standard comments:", fallbackError.message);
+               }
+            } else {
+               console.log(`[archiveChatController.getChatOrComments] Skipping standard comments fetch since commentCount is 0.`);
+            }
+         } else {
+            // Normal video: skip heavy Python scraper entirely
+            console.log(`[archiveChatController.getChatOrComments] Video is standard VOD. Skipping Python scraper.`);
+            if (commentCount > 0) {
+               try {
+                  console.log(`[archiveChatController.getChatOrComments] Fetching standard comments for ${videoId} (commentCount: ${commentCount})`);
+                  regularComments = await videoService.getAllPastLiveComments(videoId, streamerChannelId);
+               } catch (fallbackError: any) {
+                  console.warn("[archiveChatController.getChatOrComments] Failed to fetch standard comments:", fallbackError.message);
+               }
+            } else {
+               console.log(`[archiveChatController.getChatOrComments] Skipping standard comments fetch since commentCount is 0.`);
+            }
+         }
+      } else {
+         // Fallback logic when API metadata check fails
          try {
+            console.log(`[archiveChatController.getChatOrComments] API details fetch failed. Falling back to scraping.`);
             fullPastChatLogs = await getPastStreamerChat(url);
          } catch (error: any) {
-            console.warn(`[archiveChatController.getChatOrComments] Could not fetch chat replay: ${error.message}`);
+            console.warn(`[archiveChatController.getChatOrComments] Could not fetch chat replay fallback: ${error.message}`);
+         }
+
+         try {
+            console.log(`[archiveChatController.getChatOrComments] Fetching standard comments fallback for ${videoId}`);
+            regularComments = await videoService.getAllPastLiveComments(videoId, streamerChannelId);
+         } catch (fallbackError: any) {
+            console.warn("[archiveChatController.getChatOrComments] Failed to fetch standard comments fallback:", fallbackError.message);
          }
       }
 
       if (fullPastChatLogs && !Array.isArray(fullPastChatLogs)) {
          console.warn(`[archiveChatController.getChatOrComments] Python script returned error:`, fullPastChatLogs.error || fullPastChatLogs);
          fullPastChatLogs = [];
-      }
-
-      // Fetch standard comments via YouTube API
-      let regularComments: any[] = [];
-      try {
-         console.log(`[archiveChatController.getChatOrComments] Fetching standard comments for ${videoId}`);
-         const streamerChannelId = channelLink ? generateChannelId(channelLink) : undefined;
-         regularComments = await videoService.getAllPastLiveComments(videoId, streamerChannelId);
-      } catch (fallbackError: any) {
-         console.warn("[archiveChatController.getChatOrComments] Failed to fetch standard comments:", fallbackError.message);
       }
 
       // Normalize and combine standard comments & live chat logs

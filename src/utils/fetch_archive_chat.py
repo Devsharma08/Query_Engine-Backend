@@ -106,12 +106,29 @@ def get_archived_chat_ytdlp(video_url, cookies_path=None, proxy_url=None, user_a
     temp_output_prefix = f"temp_chat_{video_id}"
     expected_file = f"{temp_output_prefix}.live_chat.json"
     
-    if os.path.exists(expected_file):
-        os.remove(expected_file)
+    # Clean up any leftover files from previous runs first
+    import glob
+    for f in glob.glob(f"{temp_output_prefix}*"):
+        try:
+            os.remove(f)
+        except Exception:
+            pass
         
     try:
         # Build command options
-        cmd = ["yt-dlp", "--verbose", "--write-subs", "--sub-langs", "live_chat", "--skip-download", "--output", temp_output_prefix]
+        cmd = [
+            "yt-dlp", 
+            "--no-part", 
+            "--verbose", 
+            "--write-subs", 
+            "--sub-langs", "live_chat", 
+            "--skip-download", 
+            "--output", temp_output_prefix,
+            "--extractor-args", "youtube:player-client=web_safari,android",
+            "--no-check-certificates",
+            "--gl", "US",
+            "--legacy-server-connect"
+        ]
         if cookies_path:
             cmd.extend(["--cookies", cookies_path])
         if proxy_url:
@@ -125,18 +142,26 @@ def get_archived_chat_ytdlp(video_url, cookies_path=None, proxy_url=None, user_a
         if result.returncode != 0:
             raise Exception(f"yt-dlp execution failed (code {result.returncode}): {result.stderr.strip()}")
         
-        if not os.path.exists(expected_file):
-            import glob
-            files = glob.glob(f"{temp_output_prefix}*")
-            sys.stderr.write(f"[yt-dlp diagnostic] files starting with {temp_output_prefix}: {files}\n")
-            sys.stderr.write(f"[yt-dlp diagnostic] stdout:\n{result.stdout}\nstderr:\n{result.stderr}\n")
-            sys.stderr.flush()
-            raise Exception("yt-dlp execution did not generate a live chat JSON file")
+        target_file = expected_file
+        if not os.path.exists(target_file):
+            part_file = expected_file + ".part"
+            if os.path.exists(part_file):
+                target_file = part_file
+            else:
+                files = glob.glob(f"{temp_output_prefix}*")
+                sys.stderr.write(f"[yt-dlp diagnostic] files starting with {temp_output_prefix}: {files}\n")
+                sys.stderr.write(f"[yt-dlp diagnostic] stdout:\n{result.stdout}\nstderr:\n{result.stderr}\n")
+                sys.stderr.flush()
+                raise Exception("yt-dlp execution did not generate a live chat JSON file")
             
-        return parse_yt_dlp_chat(expected_file)
+        return parse_yt_dlp_chat(target_file)
     finally:
-        if os.path.exists(expected_file):
-            os.remove(expected_file)
+        # Clean up all temporary files starting with temp_output_prefix
+        for f in glob.glob(f"{temp_output_prefix}*"):
+            try:
+                os.remove(f)
+            except Exception:
+                pass
 
 def get_archived_chat(video_url):
     try:

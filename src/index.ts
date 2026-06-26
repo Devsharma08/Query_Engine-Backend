@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import dotenv from 'dotenv'
 import cors from 'cors';
 import { setGlobalDispatcher, Agent } from 'undici';
+import { exec } from 'child_process';
 
 // Increase fetch timeouts globally to prevent HeadersTimeoutError (UND_ERR_HEADERS_TIMEOUT)
 // when waiting for local Ollama LLM inference/embedding generations.
@@ -48,4 +49,17 @@ app.get('/api/health', (req: Request, res: Response) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Backend server successfully running on http://localhost:${PORT}`);
+  
+  // Dynamically update yt-dlp and yt-dlp-ejs to the latest versions on startup in the background
+  console.log('[Startup] Checking and updating yt-dlp and yt-dlp-ejs inside the container...');
+  exec('pip install --upgrade yt-dlp yt-dlp-ejs', (error, stdout, stderr) => {
+    if (error) {
+      console.error('[Startup] Failed to auto-update yt-dlp:', error);
+      return;
+    }
+    console.log('[Startup] yt-dlp update success:', stdout.trim());
+    if (stderr) {
+      console.warn('[Startup] yt-dlp update warning/info:', stderr.trim());
+    }
+  });
 });
