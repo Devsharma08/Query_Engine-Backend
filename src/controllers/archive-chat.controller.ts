@@ -120,7 +120,7 @@ export async function getChatOrComments(req: Request, res: Response): Promise<vo
       const streamerChannelId = channelLink ? generateChannelId(channelLink) : undefined;
 
       if (metadataFetched) {
-         if (isLiveStream && (liveStatus === 'completed' || liveStatus === 'live')) {
+         if (isLiveStream) {
             // Completed (or active fallback) livestream: fetch replay using Python scraper
             try {
                console.log(`[archiveChatController.getChatOrComments] Video is a livestream (${liveStatus}). Invoking python scraper.`);
