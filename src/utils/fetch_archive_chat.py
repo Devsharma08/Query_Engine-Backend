@@ -126,6 +126,9 @@ def get_archived_chat_ytdlp(video_url, cookies_path=None, proxy_url=None, user_a
             raise Exception(f"yt-dlp execution failed (code {result.returncode}): {result.stderr.strip()}")
         
         if not os.path.exists(expected_file):
+            import glob
+            files = glob.glob(f"{temp_output_prefix}*")
+            sys.stderr.write(f"[yt-dlp diagnostic] files starting with {temp_output_prefix}: {files}\n")
             sys.stderr.write(f"[yt-dlp diagnostic] stdout:\n{result.stdout}\nstderr:\n{result.stderr}\n")
             sys.stderr.flush()
             raise Exception("yt-dlp execution did not generate a live chat JSON file")
