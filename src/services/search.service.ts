@@ -3,17 +3,22 @@ import { fetch as undiciFetch, Agent } from 'undici';
 import { TimelineBlock } from "./timeline.service";
 import { cosineSimilarity } from "../utils/youtube-parser";
 
+// Initialize a connection agent with 5-minute timeout parameters for the Ollama connection
 const ollamaAgent = new Agent({
   connectTimeout: 60000,
   headersTimeout: 300000,
   bodyTimeout: 300000,
 });
 
+// Configure the Ollama instance to communicate with the local host container
 const ollama = new Ollama({
   host: process.env.OLLAMA_HOST || 'http://127.0.0.1:11434',
   fetch: ((input: any, init: any) => undiciFetch(input, { ...init, dispatcher: ollamaAgent })) as any
 });
 
+/**
+ * Service to execute semantic RAG queries and keyword search against timeline blocks.
+ */
 export class SearchService {
   /**
    * Performs standard keyword search, counting term occurrences and phrase matches.
@@ -96,3 +101,4 @@ export class SearchService {
     return scoredBlocks.sort((a, b) => b.score - a.score);
   }
 }
+

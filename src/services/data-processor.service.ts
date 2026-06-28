@@ -2,12 +2,14 @@ import { Ollama } from 'ollama';
 import { fetch as undiciFetch, Agent } from 'undici';
 import { cosineSimilarity } from '../utils/youtube-parser';
 
+// Initialize a connection agent with 5-minute timeout parameters for the Ollama connection
 const ollamaAgent = new Agent({
   connectTimeout: 60000,
   headersTimeout: 300000,
   bodyTimeout: 300000,
 });
 
+// Configure the Ollama instance to communicate with the local host container
 const ollama = new Ollama({
   host: process.env.OLLAMA_HOST || 'http://127.0.0.1:11434',
   fetch: ((input: any, init: any) => undiciFetch(input, { ...init, dispatcher: ollamaAgent })) as any
@@ -19,16 +21,29 @@ export interface TimelineSegment {
   durationInSeconds: number;
 }
 
+/**
+ * Service to process transcript structures, extract keywords via semantic vector anchors,
+ * and automatically compile chapter timestamps and titles using local LLMs.
+ */
 export class DataProcessorService {
   private modelName = 'gemma3:1b';
 
+  /**
+   * Computes the cosine similarity value between two numeric vectors.
+   */
   private cosineSimilarity(vecA: number[], vecB: number[]): number {
     return cosineSimilarity(vecA, vecB);
   }
 
+  /**
+   * Requests a vector representation of the text using Google's generative language embedding API.
+   * 
+   * @param text Input text content
+   * @returns High-dimensional float array representing the text
+   */
   private async generateEmbedding(text: string): Promise<number[]> {
     const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new Error("GEMINI_API_KEY is not defined");
+    if (!apiKey) throw new Error("GEMINI_API_KEY is not defined in environment variables.");
 
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`,
@@ -52,9 +67,15 @@ export class DataProcessorService {
     throw new Error("Invalid response format received from Gemini API");
   }
 
+  /**
+   * Requests vector representations for a batch of strings concurrently.
+   * 
+   * @param texts Array of string payloads
+   * @returns Array containing vector arrays for each string input
+   */
   private async generateEmbeddingsBatch(texts: string[]): Promise<number[][]> {
     const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new Error("GEMINI_API_KEY is not defined");
+    if (!apiKey) throw new Error("GEMINI_API_KEY is not defined in environment variables.");
 
     const requests = texts.map(text => ({
       model: "models/gemini-embedding-001",
@@ -81,6 +102,16 @@ export class DataProcessorService {
     throw new Error("Invalid response format received from Gemini batch embedding API");
   }
 
+  /**
+   * Extracts and cleans the top semantic keyword tags from transcript texts.
+   * Filters out common stop words, calculates candidate frequency, compares semantic vectors
+   * against an introduction/description anchor context, and cleans filler words using the local LLM.
+   * 
+   * @param text Raw transcript text
+   * @param maxTags Maximum tags to return (defaults to 8)
+   * @param description Optional video description metadata to use as the semantic anchor
+   * @returns Clean, translated lowercase keyword strings array
+   */
   public async extractKeywords(text: string, maxTags: number = 8, description?: string): Promise<string[]> {
     const stopWords = new Set([
       // English stop words
@@ -119,7 +150,7 @@ export class DataProcessorService {
       'iske', 'iski', 'iska', 'inke', 'inki', 'inka'
     ]);
 
-    // Build frequency map from the entire text
+    // Build frequency maps
     const words = text
       .toLowerCase()
       .replace(/\[[^\]]*\]/g, "")
@@ -139,8 +170,7 @@ export class DataProcessorService {
       return [];
     }
 
-    // Select candidate words representing a target percentage split (50% High, 30% Mid, 20% Low)
-    // Target candidate pool size: 30 words
+    // Select candidate words representing a target percentage split (50% High, 30% Mid, 20% Low frequency)
     const poolSize = 30;
     const highTarget = Math.round(poolSize * 0.5); // 15
     const midTarget = Math.round(poolSize * 0.3);  // 9
@@ -184,7 +214,7 @@ export class DataProcessorService {
 
     let rankedCandidates = candidates.slice(0, 15);
 
-    // Semantic Vector Filtering using Cosine Similarity against the introduction anchor context
+    // Filter candidates semantically using Cosine Similarity against the anchor context
     const apiKey = process.env.GEMINI_API_KEY;
     if (apiKey && candidates.length > 0) {
       try {
@@ -192,7 +222,7 @@ export class DataProcessorService {
         if (anchorText.length > 4000) {
           anchorText = anchorText.substring(0, 4000);
         }
-        console.log(`[DataProcessorService] running semantic cosine similarity tagging for ${candidates.length} candidates using ${description ? 'video description' : 'first 1500 chars of transcript'} as anchor...`);
+        console.log(`[DataProcessorService] running semantic cosine similarity tagging for ${candidates.length} candidates...`);
         const anchorEmbedding = await this.generateEmbedding(anchorText);
 
         if (anchorEmbedding && anchorEmbedding.length > 0) {
@@ -201,13 +231,13 @@ export class DataProcessorService {
           const scoredCandidates = candidates.map((word, index) => {
             const wordEmbedding = candidateEmbeddings[index];
             if (!wordEmbedding || wordEmbedding.length === 0) {
-              return { word, score: 0 };
+               return { word, score: 0 };
             }
             const score = this.cosineSimilarity(anchorEmbedding, wordEmbedding);
             return { word, score };
           });
 
-          // Sort by similarity descending
+          // Sort by score descending and return the top 15 candidates
           scoredCandidates.sort((a, b) => b.score - a.score);
           rankedCandidates = scoredCandidates.map(item => item.word).slice(0, 15);
         }
@@ -216,7 +246,7 @@ export class DataProcessorService {
       }
     }
 
-    // Use local LLM to translate candidates to English, filter filler words, and pick the best keywords
+    // Call the local LLM to translate and filter filler words
     try {
       console.log(`[DataProcessorService] translating & filtering ${rankedCandidates.length} candidates via local LLM...`);
       const response = await ollama.chat({
@@ -228,9 +258,9 @@ export class DataProcessorService {
 1. Translate all non-English words to English (e.g. "रिज्यूे" -> "resume", "सीएसएस" -> "css", "बैकग्राउंड" -> "background").
 2. Filter out any common conversational filler words, pronouns, adjectives, or general verbs (like "guys", "hello", "what", "you", "me", "your", "my", "how", "this", "that").
 3. Select and return ONLY a comma-separated list of the top 8 most relevant, clean English keywords. Do NOT include conversational remarks, quotes, or formatting.
-
-Candidate Words:
-"${rankedCandidates.join(', ')}"`
+ 
+ Candidate Words:
+ "${rankedCandidates.join(', ')}"`
           }
         ],
         options: {
@@ -253,21 +283,29 @@ Candidate Words:
       console.warn('[DataProcessorService] Local LLM keyword cleanup failed, using raw frequency:', err.message);
     }
 
-    // Ultimate Fallback: Return raw top high frequency words
+    // Fallback: Return raw top high frequency words
     return sortedWords.slice(0, maxTags);
   }
 
+  /**
+   * Generates auto-chapters for the video timeline.
+   * Identifies narrative transition points (welcome, first, next, finally, etc.)
+   * and queries the local LLM concurrently to generate professional chapter titles.
+   * 
+   * @param segments Video timeline segments containing offsets and spoken text
+   * @returns Array containing auto-generated chapters with timestamp, offset, and highlight title
+   */
   public async generateAutoChapters(segments: TimelineSegment[]): Promise<{ timestamp: string; seconds: number; highlightText: string }[]> {
     const rawChapters: { timestamp: string; seconds: number; rawText: string; contextText: string }[] = [];
     
-    // A balanced set of narrative transition cues
+    // Narrative transition cues
     const transitionPhrases = [
       'welcome', 'first', 'next', 'finally', 'then', 'now we', 'moving on', 'let\'s'
     ];
 
-    let lastChapterSeconds = 0; // Track the time of the last chapter placement
+    let lastChapterSeconds = 0;
 
-    // Always seed the very beginning as the first chapter
+    // Seed the first segment at 00:00 as the introduction chapter
     if (segments.length > 0) {
       const contextSegments = segments.slice(0, 5).map(s => s.text);
       rawChapters.push({
@@ -284,7 +322,8 @@ Candidate Words:
       
       const timeSinceLast = segment.startInSeconds - lastChapterSeconds;
       
-      // Enforce chapter spacing: min 6 minutes (360s) for matching keywords, OR forced chapter at 10 minutes (600s)
+      // Enforce chapter spacing guardrails: minimum 6 minutes (360s) for matched transition phrases,
+      // or a forced chapter cut at 10 minutes (600s).
       if (timeSinceLast >= 360) {
         const matchesPhrase = transitionPhrases.some(phrase => lowerText.includes(phrase));
         const isForced = timeSinceLast >= 600;
@@ -302,9 +341,9 @@ Candidate Words:
       }
     }
 
-    // Generate all AI chapter titles concurrently in parallel
+    // Generate AI titles concurrently in parallel
     const titlePromises = rawChapters.map(async (ch) => {
-      // Don't call Ollama for 00:00 introduction chapter to keep it simple and clean
+      // Return static introduction title for the starting segment
       if (ch.seconds === 0) {
         return {
           timestamp: "00:00",
@@ -320,9 +359,9 @@ Candidate Words:
             {
               role: 'user',
               content: `Instructions: Create a short, professional chapter title (2-4 words max) representing the topic beginning with the text below. Return ONLY the title itself, with no quotes, periods, conversational introduction, or formatting.
-
-Start Text:
-"${ch.contextText}"`
+ 
+ Start Text:
+ "${ch.contextText}"`
             }
           ],
           options: {
@@ -363,9 +402,12 @@ Start Text:
     return structuralChapters;
   }
 
+  /**
+   * Formats raw seconds to MM:SS string representation.
+   */
   private formatTime(seconds: number): string {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   }
-}
+}

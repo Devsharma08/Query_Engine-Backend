@@ -1,115 +1,135 @@
 import { Ollama } from 'ollama';
 import { fetch as undiciFetch, Agent } from 'undici';
 
+// Initialize connection agents with 5-minute timeouts to allow local LLM operations to complete
 const ollamaAgent = new Agent({
   connectTimeout: 60000,
   headersTimeout: 300000,
   bodyTimeout: 300000,
 });
 
+// Configure the Ollama instance communicating with the local host container
 const ollama = new Ollama({
   host: process.env.OLLAMA_HOST || 'http://127.0.0.1:11434',
   fetch: ((input: any, init: any) => undiciFetch(input, { ...init, dispatcher: ollamaAgent })) as any
 });
 
+/**
+ * Service to orchestrate progressive text stream processing, transcript summaries,
+ * and contextual natural language question answering (QA) using the local Ollama LLM.
+ */
 export class LocalAiService {
   private modelName = 'gemma3:1b';
 
   /**
-   * Generates a structural summary cleanly by processing text in steps
+   * Generates a progressive analytical summary by scanning transcript text in chunks
+   * and streaming chunks summary tokens to the client.
+   * 
+   * @param transcriptText Raw full video transcript text
+   * @param chunkToken Callback function triggered on token output or chunk progress
+   * @returns Array containing the clean summarized strings
    */
-async summarizeTranscript(
-  transcriptText: string,
-  chunkToken: (chunkTokenData: { index?: number, chunkText?: string, percentage?: number, status: 'progress' | 'token' }) => void
-): Promise<string[]> {
-  try {
-    const words = transcriptText.split(/\s+/);
-    const chunkSize = 2000;
-    const chunks: string[] = [];
-    
-    for (let i = 0; i < words.length; i += chunkSize) {
-      chunks.push(words.slice(i, i + chunkSize).join(' '));
-    }
+  async summarizeTranscript(
+    transcriptText: string,
+    chunkToken: (chunkTokenData: { index?: number, chunkText?: string, percentage?: number, status: 'progress' | 'token' }) => void
+  ): Promise<string[]> {
+    try {
+      const words = transcriptText.split(/\s+/);
+      const chunkSize = 2000;
+      const chunks: string[] = [];
+      
+      for (let i = 0; i < words.length; i += chunkSize) {
+        chunks.push(words.slice(i, i + chunkSize).join(' '));
+      }
 
-    const totalChunks = chunks.length;
-    let finishedChunksCount = 0;
-    const summaryResults: string[] = [];
+      const totalChunks = chunks.length;
+      let finishedChunksCount = 0;
+      const summaryResults: string[] = [];
 
-    for (let index = 0; index < chunks.length; index++) {
-      const chunkText = chunks[index];
-      let chunkSummary = ''; // Accumulate summary text per chunk
+      for (let index = 0; index < chunks.length; index++) {
+        const chunkText = chunks[index];
+        let chunkSummary = '';
 
-      const response = await ollama.chat({
-        model: this.modelName,
-        messages: [
-          {
-            role: 'system',
-            content: 'You are an analytics assistant. Provide a detailed summary of the video segment in bullet points. Do not print short conversational replies.'
+        // Request streamed chat generation from local LLM
+        const response = await ollama.chat({
+          model: this.modelName,
+          messages: [
+            {
+              role: 'system',
+              content: 'You are an analytics assistant. Provide a detailed summary of the video segment in bullet points. Do not print short conversational replies.'
+            },
+            {
+              role: 'user',
+              content: chunkText 
+            }
+          ],
+          options: {
+            temperature: 0.1,
+            num_predict: 200,
+            top_p: 0.9,
+            num_ctx: 4096
           },
-          {
-            role: 'user',
-            content: chunkText 
-          }
-        ],
-        options: {
-          temperature: 0.1,
-          num_predict: 200,
-          top_p: 0.9,
-          num_ctx: 4096
-        },
-        stream:true
-      });
+          stream: true
+        });
 
-      
-     for await(const token of response){
-      let tempText = token.message.content ;
-      chunkSummary += tempText ;
+        // Loop through streamed tokens and pass them back via the callback
+        for await (const token of response) {
+          let tempText = token.message.content;
+          chunkSummary += tempText;
+          chunkToken({
+            chunkText: tempText,
+            index: index,
+            percentage: Math.round((index / chunks.length) * 100),
+            status: 'token',
+          });
+        }
+
+        finishedChunksCount++;
         chunkToken({
-          chunkText:tempText,
-          index:index,
-          percentage:Math.round((index/chunks.length)*100),
-          status:'token',
-        })
-     }
+          percentage: Math.round((finishedChunksCount / chunks.length) * 100),
+          status: 'progress',
+        });
 
-      finishedChunksCount++;
-      chunkToken({
-        percentage:Math.round((finishedChunksCount/chunks.length)*100),
-        status:'progress',
-      })
+        let cleanSummary = chunkSummary.trim();
+        
+        // Strip conversational intros from the model response if they don't start with a bullet point
+        if (cleanSummary && !cleanSummary.startsWith('-') && !cleanSummary.startsWith('*') && !cleanSummary.startsWith('•')) {
+          const lines = cleanSummary.split('\n');
+          if (lines.length > 1) {
+            lines.shift();
+            cleanSummary = lines.join('\n').trim();
+          }
+        }
 
-      let cleanSummary = chunkSummary.trim();
-      
-      // Strip conversational intros from the model response if they don't start with a bullet point
-      if (cleanSummary && !cleanSummary.startsWith('-') && !cleanSummary.startsWith('*') && !cleanSummary.startsWith('•')) {
-        const lines = cleanSummary.split('\n');
-        if (lines.length > 1) {
-          lines.shift();
-          cleanSummary = lines.join('\n').trim();
+        // Only print the main header block for the very first iteration
+        if (index === 0) {
+          summaryResults.push(`--- Stream Summary Notes ---\n${cleanSummary}`);
+        } else {
+          summaryResults.push(`\n${cleanSummary}`);
         }
       }
+      
+      return summaryResults;
 
-      // Only print the main header block for the very first iteration
-      if (index === 0) {
-        summaryResults.push(`--- Stream Summary Notes ---\n${cleanSummary}`);
-      } else {
-        summaryResults.push(`\n${cleanSummary}`);
-      }
+    } catch (error: any) {
+      console.error('Ollama Chunking Pipe Failure:', error.message);
+      chunkToken?.({
+        percentage: 0,
+        status: 'progress'
+      });
+      throw new Error(`Local inference engine dropped frame processing tasks: ${error.message}`);
     }
-    
-    return summaryResults;
-
-  } catch (error: any) {
-    console.error('Ollama Chunking Pipe Failure:', error.message);
-    chunkToken?.({
-      percentage: 0,
-      status: 'progress'
-    });
-    throw new Error(`Local inference engine dropped frame processing tasks: ${error.message}`);
   }
-}
+
   /**
-   * Resilient Question Answering over Context
+   * Performs natural language question answering against the compiled context.
+   * Employs a sliding-window heuristic keyword retrieval filter to narrow down context size
+   * if the input raw transcript exceeds 8000 characters.
+   * 
+   * @param transcriptText Raw transcript or matching blocks
+   * @param userQuestion Natural language query
+   * @param streamChunks Callback function to stream generated text tokens back
+   * @returns The compiled full text response
    */
   async queryVideoContext(
       transcriptText: string, 
@@ -173,7 +193,7 @@ async summarizeTranscript(
             targetedContext = topChunks.join('\n\n').trim();
           }
 
-          // Resilient Fallback: If no chunks matched, take the first 6,000 characters
+          // Resilient Fallback: If no chunks matched, take the first 6000 characters
           if (!targetedContext) {
             console.log(`[localAi.queryVideoContext] No matches for search terms ${JSON.stringify(searchTerms)}. Falling back to first 6000 chars of transcript.`);
             targetedContext = transcriptText.substring(0, 6000).trim();
@@ -188,22 +208,22 @@ async summarizeTranscript(
   
         console.log(`[localAi.queryVideoContext] Sending targeted context of size ${targetedContext.length} chars to Ollama.`);
   
+        // Stream inference request from local LLM
         const responseStream = await ollama.chat({
           model: this.modelName,
           messages: [
             {
               role: 'user',
               content: `Instructions: Answer the question comprehensively and precisely using ONLY the provided video context. Provide a detailed, complete response (2-4 sentences) explaining the details. If the answer is completely missing, reply with "Information not located in video context". Do not start your response with "Okay", "Sure", or any introductory remarks.
-
-Context:
-"""
-${targetedContext}
-"""
-
-Question: ${userQuestion}`
+ 
+ Context:
+ """
+ ${targetedContext}
+ """
+ 
+ Question: ${userQuestion}`
             }
           ],
-
           options: {
             temperature: 0.1,
             num_predict: 250,

@@ -1,8 +1,16 @@
 import { TimelineBlock } from './timeline.service';
 
+/**
+ * Service to generate vector representation embeddings for timeline block texts
+ * using the Google Generative Language API model.
+ */
 export class EmbeddingService {
   /**
-   * Generates a single embedding vector for a given text using Google's text-embedding-004 model
+   * Generates a single embedding vector for a given text using Google's text-embedding-004 model.
+   * Falls back to returning an empty array on connection errors to remain resilient.
+   * 
+   * @param text Input string text to embed
+   * @returns Numeric vector float array representing text semantics
    */
   public async generateEmbedding(text: string): Promise<number[]> {
     try {
@@ -42,12 +50,16 @@ export class EmbeddingService {
   }
 
   /**
-   * Generates and assigns embeddings for a list of timeline blocks in parallel
+   * Generates and assigns semantic vector embeddings for a list of timeline blocks in parallel.
+   * 
+   * @param blocks Array of timeline block structures
+   * @returns Modified blocks containing generated embeddings
    */
   public async embedBlocks(blocks: TimelineBlock[]): Promise<TimelineBlock[]> {
     if (!Array.isArray(blocks) || blocks.length === 0) return [];
     
     console.log(`[EMBEDDING] Generating embeddings for ${blocks.length} blocks...`);
+    // Run embeddings calls in parallel to maximize throughput speed
     await Promise.all(
       blocks.map(async (block) => {
         const embedding = await this.generateEmbedding(block.combinedText);
@@ -59,4 +71,4 @@ export class EmbeddingService {
     console.log(`[EMBEDDING] Successfully generated embeddings.`);
     return blocks;
   }
-}
+}

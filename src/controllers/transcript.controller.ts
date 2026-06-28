@@ -9,12 +9,18 @@ const dataProcessor = new DataProcessorService();
 const youtubeService = new YoutubeService();
 
 /**
- * Controller to fetch full video transcript and translate it if needed, streamed via SSE.
+ * Controller to fetch the full closed caption transcript of a video.
+ * Automatically detects the source language and translates it to English using the translation utilities.
+ * Streams progress and outcomes via Server-Sent Events (SSE).
+ * 
+ * @param req Express Request object containing `url` in the body
+ * @param res Express Response object configured for SSE output
  */
 export async function getVideoTranscript(req: Request, res: Response): Promise<void> {
    try {
       const { url } = req.body || {};
       
+      // Initialize SSE stream headers
       res.status(200).writeHead(200, {
          "Content-Type": "text/event-stream",
          "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -57,12 +63,18 @@ export async function getVideoTranscript(req: Request, res: Response): Promise<v
 }
 
 /**
- * Controller to extract chapters, summary, and keywords from the video transcript, streamed via SSE.
+ * Controller to extract chapters, summary, and keyword tags from the video transcript.
+ * Retrieves additional video description metadata via the YouTube Data API to use as an anchor context,
+ * then streams outcomes progressively via Server-Sent Events (SSE).
+ * 
+ * @param req Express Request object containing `url` in the body
+ * @param res Express Response object configured for SSE output
  */
 export async function processTranscriptOutcomes(req: Request, res: Response): Promise<void> {
    try {
       const { url } = req.body || {};
       
+      // Initialize SSE stream headers
       res.status(200).writeHead(200, {
          "Content-Type": "text/event-stream",
          "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -115,4 +127,5 @@ export async function processTranscriptOutcomes(req: Request, res: Response): Pr
       res.end();
    }
 }
+
 

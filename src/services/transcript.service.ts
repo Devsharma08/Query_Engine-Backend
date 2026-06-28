@@ -1,14 +1,26 @@
 import { YoutubeTranscript } from "youtube-transcript";
 import { extractVideoId } from "../utils/youtube-parser";
-import { YoutubeService } from "./google.service";
 import { ProxyAgent } from "undici";
 import * as crypto from "crypto";
 
+/**
+ * Extracts the SAPISID token from a raw YouTube Cookie header.
+ * 
+ * @param cookieStr Raw semi-colon delimited Cookie string
+ * @returns SAPISID token value if matched, otherwise undefined
+ */
 function getSapisidFromCookie(cookieStr: string): string | undefined {
    const match = cookieStr.match(/SAPISID=([^;]+)/);
    return match ? match[1].trim() : undefined;
 }
 
+/**
+ * Generates the dynamic SAPISIDHASH signature required for authenticated InnerTube API requests.
+ * 
+ * @param sapisid SAPISID token value
+ * @param origin Request origin domain (defaults to https://www.youtube.com)
+ * @returns Formatted Authorization header value
+ */
 function generateSapisidHash(sapisid: string, origin: string = "https://www.youtube.com"): string {
    const timestamp = Math.floor(Date.now() / 1000);
    const message = `${timestamp} ${sapisid} ${origin}`;
@@ -16,24 +28,24 @@ function generateSapisidHash(sapisid: string, origin: string = "https://www.yout
    return `SAPISIDHASH ${timestamp}_${hash}`;
 }
 
-interface TimelineSegment {
+export interface TimelineSegment {
    text: string;
    startInSeconds: number;
    durationInSeconds: number;
+   totalTimeInSeconds?: number;
 }
 
-// YoutubeTranscript.fetchTranscript return type is [
-//   {
-//     text: string;
-//     duration: number;
-//     offset: number;
-//     lang:string; // only for auto generated 
-//   }
-// ]
-
-
+/**
+ * Service to fetch and parse YouTube video transcripts (closed captions).
+ */
 export class TranscriptService {
-   youtubeService = new YoutubeService();
+   /**
+    * Retrieves the full caption transcript for a given YouTube video URL.
+    * Automatically handles custom user-agent, cookies, and HTTP proxy configuration.
+    * 
+    * @param url Fully qualified YouTube video link
+    * @returns Structured object containing the parsed full text and timed segments
+    */
    async getFullVideoTranscript(url: string): Promise<{ videoId: string, totalTextLength: number, fullCaptionText: string, timelineSegments: TimelineSegment[] }> {
       try {
          const videoId = extractVideoId(url);
@@ -45,9 +57,7 @@ export class TranscriptService {
          const youtubeCookie = process.env.YOUTUBE_COOKIE;
          const youtubeUA = process.env.YOUTUBE_USER_AGENT;
          
-         console.log(`[EXPRESS-APP-DEBUG] Ingesting videoId: ${videoId}`);
-         console.log(`[EXPRESS-APP-DEBUG] YOUTUBE_COOKIE length: ${youtubeCookie?.length || 0}`);
-         console.log(`[EXPRESS-APP-DEBUG] YOUTUBE_USER_AGENT: ${youtubeUA}`);
+         console.log(`[TranscriptService.getFullVideoTranscript] Ingesting videoId: ${videoId}`);
          
          const cleanCookie = youtubeCookie
             ? youtubeCookie.replace(/^["']|["']$/g, "").replace(/[\r\n]+/g, "").trim()
@@ -55,27 +65,29 @@ export class TranscriptService {
          let fetchConfig = {};
 
          if (proxyUrl || cleanCookie || youtubeUA) {
-            // When cookies are present, bypass the proxy since direct connection works and proxy IPs are often rate-limited (429)
+            // When cookies are present, bypass proxy routing because direct connection works,
+            // whereas proxy IPs are frequently rate-limited (HTTP 429) by Google.
             const proxyAgent = (proxyUrl && !cleanCookie) ? new ProxyAgent(proxyUrl) : undefined;
             if (proxyUrl && cleanCookie) {
                console.log("[TranscriptService] Cookie is present. Bypassing PROXY_URL to avoid proxy rate limits.");
             }
+            
             fetchConfig = {
                fetch: async (url: string, init: any) => {
                   let requestUrl = url;
-                  // Force XML formatting if it's a timedtext request and missing fmt=srv3
+                  // Force XML output format if it's a timedtext request lacking the srv3 parameter
                   if (url.includes("/api/timedtext") && !url.includes("&fmt=srv3")) {
                      requestUrl = `${url}&fmt=srv3`;
                   }
 
-                  // Resolve relative URLs
+                  // Resolve relative paths to absolute YouTube URLs
                   if (requestUrl.startsWith("/")) {
                      requestUrl = `https://www.youtube.com${requestUrl}`;
                   }
 
                   const isInnerTube = url.includes("/youtubei/v1/player");
 
-                  // We use the mobile UA for both watch pages and InnerTube if we force MWEB
+                  // Fall back to a default Android mobile User Agent if none is configured
                   let resolvedUA = youtubeUA || "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Mobile Safari/537.36";
 
                   let bodyOverride = init?.body;
@@ -83,13 +95,14 @@ export class TranscriptService {
                      try {
                         const bodyObj = JSON.parse(init.body);
                         if (bodyObj.context?.client) {
-                           // Force MWEB client which is known to work with cookies & headers
+                           // Force InnerTube to treat client as MWEB (mobile web client),
+                           // which works reliably with cookie-based authorization headers.
                            bodyObj.context.client.clientName = "MWEB";
                            bodyObj.context.client.clientVersion = "2.20240308.01.00";
                            bodyOverride = JSON.stringify(bodyObj);
                         }
                      } catch (e) {
-                        // ignore
+                        // Ignore body parsing issues and proceed with original body
                      }
                   }
 
@@ -116,12 +129,6 @@ export class TranscriptService {
                      }
                   }
 
-                  console.log(`[EXPRESS-APP-DEBUG.fetch] Request URL: ${requestUrl}`);
-                  console.log(`[EXPRESS-APP-DEBUG.fetch] Request Headers:`, JSON.stringify({
-                     ...headers,
-                     Cookie: headers.Cookie ? headers.Cookie.substring(0, 50) + "..." : undefined
-                  }));
-
                   try {
                      const response = await fetch(requestUrl, {
                         ...init,
@@ -131,9 +138,8 @@ export class TranscriptService {
                      } as any);
 
                      let text = await response.text();
-                     console.log(`[EXPRESS-APP-DEBUG.fetch] Response Status: ${response.status} ${response.statusText}`);
 
-                     // Intercept /youtubei/v1/player response to rewrite relative baseUrl paths
+                     // Intercept InnerTube player responses to prepend YouTube origin to relative URLs
                      if (isInnerTube && response.status === 200) {
                         try {
                            const data = JSON.parse(text);
@@ -147,7 +153,7 @@ export class TranscriptService {
                            }
                            text = JSON.stringify(data);
                         } catch (e) {
-                           // ignore
+                           // Ignore parser warnings
                         }
                      }
 
@@ -163,21 +169,14 @@ export class TranscriptService {
             };
          }
 
-         // fetch the text array from youtube
+         // Fetch timed-text transcript via youtube-transcript library
          const transcript = await YoutubeTranscript.fetchTranscript(videoId, fetchConfig);
-         // console.log("transcript text from transcript service : ",transcript);
 
          if (!transcript || transcript.length === 0) {
-            throw new Error("No transcript found for video id");
+            throw new Error("No transcript captions found for the requested video ID.");
          }
 
-         // fetching comments from the youtube video using youtube api for deep understanding of the video
-         const comments = await this.youtubeService.getAllPastLiveComments(videoId);
-         console.log("comments from transcript service : ", comments);
-
-         // task - on success will match the o/p with chat for reference for doubts and some other info will figure out later
-
-
+         // Merge timed transcript parts and sanitize special character codes
          const fullText = transcript.map((item) => {
             return item.text
                .replace(/&#39;/g, "'")
@@ -187,7 +186,8 @@ export class TranscriptService {
                .replace(/&gt;/g, '>')
                .trim();
          }).join(" ");
-         // return required fields only not the whole transcript array
+
+         // Return clean video details and parsed segments
          return {
             videoId,
             totalTextLength: fullText.length,
@@ -200,13 +200,12 @@ export class TranscriptService {
                   startInSeconds: startInSeconds,
                   durationInSeconds: durationInSeconds,
                   totalTimeInSeconds: startInSeconds + durationInSeconds
-               }
+               };
             }),
-
-         }
+         };
       } catch (error: any) {
-         console.error("Error fetching video transcript:", error);
-         throw new Error(error.message || "failed to retrieve captions");
+         console.error("[TranscriptService.getFullVideoTranscript] Error:", error);
+         throw new Error(error.message || "Failed to retrieve video captions.");
       }
    }
-}
+}

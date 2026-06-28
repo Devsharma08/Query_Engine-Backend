@@ -7,7 +7,10 @@ import { ProxyAgent } from 'undici';
 const videoService = new YoutubeService();
 
 /**
- * Creates a configured Innertube instance with optional cookie/proxy support.
+ * Creates a configured Innertube client instance.
+ * Automatically provisions youtube-cookies or HTTP proxy agents to prevent rate limiting.
+ * 
+ * @returns Configured Innertube client instance
  */
 async function createInnertubeClient(): Promise<any> {
    const config: any = {
@@ -15,6 +18,7 @@ async function createInnertubeClient(): Promise<any> {
       location: 'US',
    };
 
+   // Clean and inject authentication cookies if defined in environment variables
    const youtubeCookie = process.env.YOUTUBE_COOKIE;
    if (youtubeCookie) {
       const cleanCookie = youtubeCookie.replace(/^["']|["']$/g, "").replace(/[\r\n]+/g, "").trim();
@@ -23,6 +27,7 @@ async function createInnertubeClient(): Promise<any> {
       }
    }
 
+   // Inject ProxyAgent if PROXY_URL is configured and cookies are absent
    const proxyUrl = process.env.PROXY_URL;
    if (proxyUrl && !youtubeCookie) {
       const cleanProxy = proxyUrl.replace(/^["']|["']$/g, "").replace(/[\r\n]+/g, "").trim();
@@ -41,15 +46,16 @@ async function createInnertubeClient(): Promise<any> {
 }
 
 /**
- * Extracts a single chat message from a chat action item.
- * Returns null if the item isn't a parseable text message.
+ * Parses and extracts text message events from a chat action object.
+ * 
+ * @param action Raw replay chat item action object
+ * @returns Normalized array containing parsed message details, or null
  */
 function extractChatMessage(action: any): any | null {
    try {
-      // Handle both replay wrapper and direct actions
       let chatItems: any[] = [];
       
-      // Replay format: ReplayChatItemAction wrapping multiple actions
+      // Replay actions are wrapped inside ReplayChatItemAction containers
       if (action.type === 'ReplayChatItemAction') {
          chatItems = action.actions || [];
       } else {
@@ -62,7 +68,7 @@ function extractChatMessage(action: any): any | null {
          let item: any = null;
          let offsetMsec: number | null = null;
          
-         // Try to get the item from AddChatItemAction
+         // Extract nested item body
          if (chatAction.type === 'AddChatItemAction') {
             item = chatAction.item;
          } else if (chatAction.item) {
@@ -71,21 +77,21 @@ function extractChatMessage(action: any): any | null {
          
          if (!item) continue;
          
-         // Get offset from the parent replay action
+         // Record time offset from video starting point
          if (action.video_offset_time_msec !== undefined) {
             offsetMsec = Number(action.video_offset_time_msec);
          }
 
-         // Handle LiveChatTextMessage
+         // Only process text message events (skip superchats, member alerts, etc.)
          if (item.type === 'LiveChatTextMessage') {
             const messageText = item.message?.toString?.() || 
                                item.message?.text ||
                                (item.message?.runs?.map((r: any) => r.text || r.toString?.() || '').join('')) || 
-                               '';
+                                '';
             const author = item.author?.name?.toString?.() || 
-                          item.author?.name?.text ||
-                          item.author?.name?.simple_text || 
-                          'Anonymous';
+                           item.author?.name?.text ||
+                           item.author?.name?.simple_text || 
+                           'Anonymous';
             const authorChannelId = item.author?.id || 
                                    item.author?.channel_id || 
                                    null;
@@ -93,7 +99,7 @@ function extractChatMessage(action: any): any | null {
             const timeInSeconds = offsetMsec !== null ? offsetMsec / 1000 : null;
             const timestamp = item.timestamp ? Number(item.timestamp) / 1000 : null;
 
-            // Check for OWNER badge (streamer)
+            // Detect owner/streamer custom badges to mark their messages
             let isStreamer = false;
             const badges = item.author?.badges || [];
             for (const badge of badges) {
@@ -101,7 +107,6 @@ function extractChatMessage(action: any): any | null {
                    badge?.style === 'CHAT_BADGE' ||
                    badge?.icon?.icon_type === 'OWNER' ||
                    badge?.type === 'LiveChatAuthorBadge') {
-                  // Check if this is specifically the owner badge
                   const iconType = badge?.icon_type || badge?.icon?.icon_type || '';
                   if (iconType === 'OWNER') {
                      isStreamer = true;
@@ -122,15 +127,19 @@ function extractChatMessage(action: any): any | null {
       }
       
       return results.length > 0 ? results : null;
-   } catch (err) {
+   } catch {
       return null;
    }
 }
 
 /**
- * Fetches live chat replays by directly calling the YouTube internal API
- * with manual continuation token management.
- * Bypasses the buggy LiveChat event system that spams 400 errors on continuation.
+ * Scrapes livestream chat replays by invoking YouTube internal endpoints directly
+ * using sequential continuation tokens.
+ * This bypasses YouTube's buggy EventSource stream endpoints which return 400 errors during paging.
+ * 
+ * @param url Stream link
+ * @param maxMessages Maximum number of messages to pull (defaults to 5000)
+ * @returns Array of parsed chat logs
  */
 export async function getPastStreamerChat(url: string, maxMessages = 5000): Promise<any[]> {
    const videoId = extractVideoId(url);
@@ -146,7 +155,6 @@ export async function getPastStreamerChat(url: string, maxMessages = 5000): Prom
       console.log(`[getPastStreamerChat] Fetching video info for: ${videoId}`);
       const videoInfo: any = await youtube.getInfo(videoId);
 
-      // Check if this video has live chat replay available
       const livechatData = videoInfo.livechat;
       if (!livechatData) {
          console.log(`[getPastStreamerChat] No live chat replay available for ${videoId}`);
@@ -165,7 +173,7 @@ export async function getPastStreamerChat(url: string, maxMessages = 5000): Prom
 
       const chatLogs: any[] = [];
       const MAX_MESSAGES = maxMessages;
-      const MAX_PAGES = 50;
+      const MAX_PAGES = 50; // Guardrail to prevent infinite loop
       let continuationToken = initialContinuation;
       let pageCount = 0;
 
@@ -183,10 +191,7 @@ export async function getPastStreamerChat(url: string, maxMessages = 5000): Prom
                break;
             }
 
-            // Extract the next continuation token
             const nextToken = contents.continuation?.token;
-
-            // Extract actions from this page — actions is an ObservedArray from Parser.parse()
             const rawActions = contents.actions;
             const actionsArray: any[] = rawActions ? Array.from(rawActions) : [];
             
@@ -212,7 +217,7 @@ export async function getPastStreamerChat(url: string, maxMessages = 5000): Prom
          } catch (pageErr: any) {
             const errMsg = pageErr?.message || String(pageErr);
             console.warn(`[getPastStreamerChat] Page ${pageCount} failed: ${errMsg}`);
-            // Stop on errors (400 = invalid continuation token, no point retrying)
+            // Terminate fetching if a 400 Bad Request error is encountered
             break;
          }
       }
@@ -227,16 +232,17 @@ export async function getPastStreamerChat(url: string, maxMessages = 5000): Prom
 }
 
 /**
- * Resolves a YouTube @handle or channel URL to a proper UC... channel ID
- * using the YouTube Data API v3 channels.list with forHandle.
+ * Resolves a YouTube @handle or channel link to a canonical "UC..." ID.
+ * 
+ * @param channelLink Handle URL or channel ID string
+ * @returns Canonical channel ID, or undefined
  */
 async function resolveStreamerChannelId(channelLink?: string): Promise<string | undefined> {
    if (!channelLink) return undefined;
    
-   // Extract handle from URL like https://www.youtube.com/@RealInterviewExperience
+   // Parse handle format from link
    const handleMatch = channelLink.match(/@([a-zA-Z0-9_-]+)/);
    if (!handleMatch) {
-      // Maybe it's already a channel ID
       if (channelLink.startsWith('UC') && channelLink.length >= 24) {
          return channelLink;
       }
@@ -261,6 +267,10 @@ async function resolveStreamerChannelId(channelLink?: string): Promise<string | 
 /**
  * Controller to fetch either active live chat messages, completed chat replays, 
  * or standard fallback comments for a given stream URL.
+ * Supports chronological sorting, streamer identity matching, and paginated records.
+ * 
+ * @param req Express Request object
+ * @param res Express Response object
  */
 export async function getChatOrComments(req: Request, res: Response): Promise<void> {
    try {
@@ -271,7 +281,7 @@ export async function getChatOrComments(req: Request, res: Response): Promise<vo
          return;
       }
 
-      // Helper to parse integer safely from body or query
+      // Helper to parse integers safely
       const parseInteger = (val: any): number | undefined => {
          if (val === undefined || val === null || val === '') return undefined;
          const num = Number(val);
@@ -300,6 +310,7 @@ export async function getChatOrComments(req: Request, res: Response): Promise<vo
          metadataFetched = true;
          commentCount = videoDetails.commentCount ? Number(videoDetails.commentCount) : 0;
          videoChannelId = videoDetails.channelId || undefined;
+         
          if (videoDetails.isLiveStream) {
             isLiveStream = true;
             liveStatus = videoDetails.isLiveStream.status;
@@ -315,7 +326,7 @@ export async function getChatOrComments(req: Request, res: Response): Promise<vo
       let combinedComments: any[] = [];
       let isLiveActive = false;
 
-      // If active, stream live messages directly via YouTube API
+      // Case 1: Stream is actively live -> fetch active messages via YouTube Data API
       if (activeLiveChatId) {
          try {
             const liveMessages = await videoService.getActiveLiveChatMessages(activeLiveChatId);
@@ -336,9 +347,9 @@ export async function getChatOrComments(req: Request, res: Response): Promise<vo
          }
       }
 
+      // Case 2: Chat replay or comment thread fallback
       if (!isLiveActive) {
-         // Resolve the streamer's channel ID from their @handle link
-         // Use the channelId from video metadata as primary, fall back to resolving the handle
+         // Identify streamer channel ID (prioritize details info, fall back to handle resolution)
          let streamerChannelId: string | undefined = videoChannelId;
          if (!streamerChannelId && channelLink) {
             streamerChannelId = await resolveStreamerChannelId(channelLink);
@@ -355,7 +366,6 @@ export async function getChatOrComments(req: Request, res: Response): Promise<vo
 
          if (metadataFetched) {
             if (isLiveStream) {
-               // livestream: fetch live chat replay via youtubei.js
                try {
                   console.log(`[getChatOrComments] Video is a livestream. Fetching chat replay via youtubei.js (maxMessages: ${maxMessagesToScan})...`);
                   fullPastChatLogs = await getPastStreamerChat(url, maxMessagesToScan);
@@ -366,7 +376,7 @@ export async function getChatOrComments(req: Request, res: Response): Promise<vo
                console.log(`[getChatOrComments] Video is standard VOD. Skipping chat replay.`);
             }
 
-            // Always attempt to fetch standard comments via YouTube API
+            // Always retrieve standard comment threads
             try {
                console.log(`[getChatOrComments] Fetching standard comments for ${videoId}`);
                regularComments = await videoService.getAllPastLiveComments(videoId, streamerChannelId);
@@ -374,7 +384,7 @@ export async function getChatOrComments(req: Request, res: Response): Promise<vo
                console.warn("[getChatOrComments] Failed to fetch standard comments:", fallbackError.message);
             }
          } else {
-            // Fallback logic when API metadata check fails
+            // Fallback scraping sequences when initial API request fails
             try {
                console.log(`[getChatOrComments] API details fetch failed. Falling back to scraping (maxMessages: ${maxMessagesToScan}).`);
                fullPastChatLogs = await getPastStreamerChat(url, maxMessagesToScan);
@@ -395,7 +405,6 @@ export async function getChatOrComments(req: Request, res: Response): Promise<vo
             fullPastChatLogs = [];
          }
 
-         // Normalize and combine standard comments & live chat logs
          const parseDate = (dStr: string) => {
             const t = Date.parse(dStr);
             return isNaN(t) ? null : t;
@@ -415,7 +424,7 @@ export async function getChatOrComments(req: Request, res: Response): Promise<vo
             }))
             : [];
 
-         // For live chat messages, also match streamer by channel ID if badge detection missed it
+         // Re-evaluate owner state if subscriber scrapers missed the badge representation
          if (streamerChannelId) {
             for (const msg of parsedPastChat) {
                if (!msg.isStreamer && msg.authorChannelId === streamerChannelId) {
@@ -440,21 +449,21 @@ export async function getChatOrComments(req: Request, res: Response): Promise<vo
          combinedComments = [...parsedPastChat, ...parsedRegularComments];
       }
 
-      // Sort chronologically by timestamp
+      // Sort comments chronologically by timestamp
       combinedComments.sort((a, b) => {
          const tA = a.timestamp !== null ? a.timestamp : 0;
          const tB = b.timestamp !== null ? b.timestamp : 0;
          return tA - tB;
       });
 
-      // Filter by streamer if requested
+      // Filter messages down to streamer-only responses if flag is set
       if (onlyStreamerChat) {
          combinedComments = combinedComments.filter(c => c.isStreamer);
       }
 
       const streamerComments = combinedComments.filter(c => c.isStreamer);
 
-      // Apply pagination
+      // Implement pagination computations
       const totalItems = combinedComments.length;
       let paginatedData = combinedComments;
       let paginationInfo: any = null;
@@ -500,8 +509,8 @@ export async function getChatOrComments(req: Request, res: Response): Promise<vo
          data: paginatedData
       });
 
-   } catch (error: any) {
-      console.error("[getChatOrComments] Crash:", error);
-      res.status(500).json({ error: error.message });
-   }
-}
+    } catch (error: any) {
+       console.error("[getChatOrComments] Crash:", error);
+       res.status(500).json({ error: error.message });
+    }
+ }
